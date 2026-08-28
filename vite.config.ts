@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { Socket } from "node:net";
 import type { IncomingMessage } from "node:http";
@@ -18,6 +18,7 @@ import type { IncomingMessage } from "node:http";
  *   GET  /__slotify/list?path=...   -> [ { "name": "...", "dir": true|false }, ... ]
  *   GET  /__slotify/read?path=...   -> raw bytes
  *   POST /__slotify/write?path=...  -> writes the raw request body (creates parents)
+ *   POST /__slotify/delete?path=... -> removes one file (missing = ok)
  *   POST /__slotify/rcon            -> { host, port, password, command } -> { response }
  *
  * Writes are root-restricted like reads. The RCON endpoint exists because a browser
@@ -116,6 +117,18 @@ function devFsBridge(): Plugin {
               res.end("ok");
             })
             .catch((error) => fail(500, String(error)));
+          return;
+        }
+
+        if (url.pathname === "/__slotify/delete" && req.method === "POST") {
+          const path = url.searchParams.get("path");
+          if (!path || !allowed(path)) return fail(403, "path outside configured roots");
+          try {
+            rmSync(path, { force: true });
+            res.end("ok");
+          } catch (error) {
+            fail(500, String(error));
+          }
           return;
         }
 

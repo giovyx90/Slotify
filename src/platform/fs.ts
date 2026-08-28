@@ -22,6 +22,8 @@ export interface FsBackend {
   read(path: string): Promise<Uint8Array>;
   readText(path: string): Promise<string>;
   write(path: string, bytes: Uint8Array): Promise<void>;
+  /** Removes one file; a missing file is not an error. */
+  delete(path: string): Promise<void>;
 }
 
 export function joinPath(...parts: string[]): string {
@@ -58,6 +60,11 @@ class DevHttpBackend implements FsBackend {
     if (!response.ok) throw new Error(`write ${path}: ${response.status} ${await response.text()}`);
   }
 
+  async delete(path: string): Promise<void> {
+    const response = await fetch(`/__slotify/delete?path=${encodeURIComponent(path)}`, { method: "POST" });
+    if (!response.ok) throw new Error(`delete ${path}: ${response.status} ${await response.text()}`);
+  }
+
   private async json<T>(url: string): Promise<T> {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`${url}: ${response.status} ${await response.text()}`);
@@ -91,6 +98,15 @@ class TauriBackend implements FsBackend {
   async write(path: string, bytes: Uint8Array): Promise<void> {
     const fs = await import("@tauri-apps/plugin-fs");
     await fs.writeFile(path, bytes);
+  }
+
+  async delete(path: string): Promise<void> {
+    const fs = await import("@tauri-apps/plugin-fs");
+    try {
+      await fs.remove(path);
+    } catch {
+      // a missing file is not an error
+    }
   }
 }
 

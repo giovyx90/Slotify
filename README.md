@@ -70,11 +70,27 @@ The roadmap, each stage useful on its own:
    active.
 4. **Library**: check some layers, name them, *save ✓* — or *Import PNG…* — then tap
    any library entry and tap the canvas to place it.
-5. **Aa Tag generator** renders styled game-font text; download it or save it to the
-   library as a sprite.
-6. **Export** writes the stray-stripped PNG and splices the provider into `gui.json`;
-   copy the visuals/config YAML and the Java scaffold from the same panel. **Push**
-   writes a deploy plan under a target pack path and runs `nexo reload pack` over RCON.
+5. **Tag generator**, the second tab in the top bar, renders styled game-font text;
+   download it or save it to the library as a sprite.
+6. **Export to pack** — in the editor's top bar, next to **Save project** — writes the
+   stray-stripped PNG and splices the provider into `gui.json`; the *Copy out* card hands
+   you the visuals/config YAML and the Java scaffold. **Push** writes a deploy plan under
+   a target pack path and runs `nexo reload pack` over RCON.
+
+## The interface
+
+Slotify wears the [NEXT Roleplay](https://nextroleplay.gg) portal's design language:
+its red, its ink ramp, white cards on a pale canvas, Archivo for prose and IBM Plex Mono
+for every number a machine measured. A painted screen is designed here and documented
+there, so the two should not look like they came from different studios.
+
+The whole skin is one file, [`src/ui/theme.css`](src/ui/theme.css) — tokens and a small
+set of primitives (card, button, segmented control, field, badge, checkerboard stage)
+that the three screens share instead of each growing its own. Retheming Slotify for
+another project means editing the tokens at the top of that file and nothing else. The
+two faces are bundled under the SIL OFL rather than fetched from a CDN, because a
+desktop tool has to look the same with no network; see
+[`src/ui/fonts/README.md`](src/ui/fonts/README.md).
 
 ## Generic engine, per-project profiles
 

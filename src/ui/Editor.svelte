@@ -23,13 +23,26 @@
   import { visualsYmlBlock, configYmlBlock } from "../engine/visualsYml";
   import { joinPath, type FsBackend } from "../platform/fs";
   import { rconExec } from "../platform/rcon";
-  import { decodeTexture, listComponents, loadSpriteRaster, saveComponent } from "./model";
+  import { decodeTexture, deleteComponent, listComponents, loadSpriteRaster, saveComponent } from "./model";
 
   const PAD = 32;
   const ROLE_COLOURS: Record<string, string> = {
     header: "#E8B23A", stat: "#568FD6", list: "#6AB060", action: "#D6783C",
     chart: "#966EBE", info: "#5FB4B4", empty: "#C85A5A", nav: "#78788C",
   };
+  /**
+   * The chrome drawn over the artwork, in the interface's own colours: red is the
+   * selection — the thing you are acting on — blue the pieces staged for a component,
+   * ink the guides, which a pale checkerboard would otherwise swallow.
+   */
+  const OVERLAY = {
+    grid: "rgba(11,13,16,0.18)",
+    window: "rgba(11,13,16,0.30)",
+    holeFill: "rgba(217,38,50,0.28)",
+    holeLine: "rgba(217,38,50,0.85)",
+    staged: "#2570D4",
+    selected: "#FF3B47",
+  } as const;
   const SHADOW_DIRS: ShadowDir[] = [
     "none", "below-right", "below", "right", "below-left", "left", "above", "above-right", "above-left",
   ];
@@ -97,6 +110,15 @@
 
   async function refreshLibrary(): Promise<void> {
     library = await listComponents(backend, packRoot);
+  }
+
+  /** Deletes a component's files from the library — every project loses it, so ask. */
+  async function removeComponent(component: LibraryComponent): Promise<void> {
+    if (!window.confirm(`Delete "${component.name}" from the library?`)) return;
+    await deleteComponent(backend, packRoot, component);
+    if (pendingComponent?.id === component.id) pendingComponent = null;
+    await refreshLibrary();
+    statusLine = `component "${component.name}" deleted`;
   }
 
   async function ensureSprites(elements: readonly Element[]): Promise<void> {
@@ -172,10 +194,10 @@
       for (let row = 0; row < project.rows; row++) {
         for (let col = 0; col < COLS; col++) {
           const rect = slotWindowRect(row, col);
-          stroke(rect.x, rect.y, rect.w, rect.h, "rgba(255,255,255,0.18)");
+          stroke(rect.x, rect.y, rect.w, rect.h, OVERLAY.grid);
         }
       }
-      stroke(0, 0, 176, windowHeight(project.rows), "rgba(255,255,255,0.3)");
+      stroke(0, 0, 176, windowHeight(project.rows), OVERLAY.window);
     }
 
     for (const hotspot of project.hotspots) {
@@ -190,18 +212,18 @@
     if (tool === "erase") {
       for (const hole of project.holes ?? []) {
         const region = regionRect(hole, project.rows);
-        fill(region.x, region.y, region.w, region.h, "rgba(200,90,90,0.3)");
-        stroke(region.x, region.y, region.w, region.h, "rgba(200,90,90,0.8)");
+        fill(region.x, region.y, region.w, region.h, OVERLAY.holeFill);
+        stroke(region.x, region.y, region.w, region.h, OVERLAY.holeLine);
       }
     }
 
     for (const id of checked) {
       const element = project.elements.find((candidate) => candidate.id === id);
-      if (element) stroke(element.x - 1, element.y - 1, element.w + 2, element.h + 2, "#5FB4B4");
+      if (element) stroke(element.x - 1, element.y - 1, element.w + 2, element.h + 2, OVERLAY.staged);
     }
 
     if (selected) {
-      stroke(selected.x - 1, selected.y - 1, selected.w + 2, selected.h + 2, "#FFC65C", 2);
+      stroke(selected.x - 1, selected.y - 1, selected.w + 2, selected.h + 2, OVERLAY.selected, 2);
     }
   }
 
@@ -616,304 +638,511 @@
   }
 </script>
 
-<div class="editor">
-  <aside class="tools">
-    <button class="back" onclick={onExit}>← viewer</button>
-    <h2>{project.module}/{project.screenKey}</h2>
+<div class="app">
+  <header class="topbar">
+    <button class="btn ghost" onclick={onExit}>← Viewer</button>
 
-    <h3>Tools <span class="hint">button/infobox grow tile by tile</span></h3>
-    <div class="palette">
-      {#each ["select", "button", "infobox", "slot", "erase", "text", "panel", "well", "hotspot"] as candidate}
-        <button class:active={tool === candidate && !pendingComponent} onclick={() => { tool = candidate as Tool; pendingComponent = null; }}>{candidate}</button>
-      {/each}
+    <div class="ident">
+      <span class="label-mono">{project.module}</span>
+      <h2>{project.screenKey}</h2>
+    </div>
+    <span class="chip">{project.codepoint}</span>
+
+    <div class="spacer"></div>
+
+    <div class="chips">
+      <span class="chip">advance <b>{baked.advance}</b></span>
+      {#if baked.straysRemoved > 0}
+        <span class="badge warn">{baked.straysRemoved} strays stripped</span>
+      {/if}
     </div>
 
-    <h3>Library</h3>
-    <ul class="layers">
-      {#each library as component}
-        <li>
-          <button class:active={pendingComponent?.id === component.id} onclick={() => { pendingComponent = component; statusLine = `tap the canvas to place ${component.name}`; }}>
-            {component.kind === "sprite" ? "🖼" : "🧩"} {component.name} <span class="hint">{component.w}×{component.h}</span>
-          </button>
-        </li>
-      {/each}
-      {#if library.length === 0}
-        <li class="hint">No components yet — check layers below and save, or import a PNG.</li>
-      {/if}
-    </ul>
-    <div class="row2">
-      <input placeholder="component name" bind:value={componentName} />
-      <button onclick={saveSelectionAsComponent}>save ✓</button>
-    </div>
-    <button onclick={() => fileInput?.click()}>Import PNG…</button>
-    <input class="hidden" type="file" accept="image/png" bind:this={fileInput} onchange={importSpritePng} />
+    <button class="btn" onclick={saveProject}>Save project</button>
+    <button class="btn primary" onclick={exportToPack}>Export to pack</button>
+  </header>
 
-    <h3>Layers <span class="hint">✓ = in the next component</span></h3>
-    <ul class="layers">
-      {#each project.elements as element}
-        <li class="layer-row">
-          <input type="checkbox" checked={checked.has(element.id)} onchange={() => toggleChecked(element.id)} />
-          <button class:active={selectedId === element.id} onclick={() => (selectedId = element.id)}>
-            {element.kind === "tiles" ? `${element.tileKind} ×${element.cells?.length ?? 0}` : element.kind}{element.label ? ` “${element.label}”` : ""} @ {element.x},{element.y}
-          </button>
-        </li>
-      {/each}
-      {#if project.elements.length === 0}
-        <li class="hint">Pick button or infobox, then tap the grid — each tap grows the piece.</li>
-      {/if}
-    </ul>
-
-    <h3>Hotspots</h3>
-    <ul class="layers">
-      {#each project.hotspots as hotspot}
-        <li class="hotspot-row">
-          <button class:active={activeHotspot === hotspot.id} onclick={() => { activeHotspot = hotspot.id; tool = "hotspot"; }}>
-            <span class="swatch" style:background={ROLE_COLOURS[hotspot.role] ?? "#aaa"}></span>
-            {hotspot.id} · {hotspot.slots.length}
-          </button>
-          <select bind:value={hotspot.role} onchange={touch}>
-            {#each Object.keys(ROLE_COLOURS) as role}<option>{role}</option>{/each}
-          </select>
-        </li>
-      {/each}
-    </ul>
-    <button onclick={addHotspot}>+ hotspot group</button>
-  </aside>
-
-  <section class="stage" >
-    <canvas
-      bind:this={canvas}
-      onpointerdown={onPointerDown}
-      onpointermove={onPointerMove}
-      onpointerup={onPointerUp}
-    ></canvas>
-  </section>
-
-  <aside class="panel">
-    {#if selected}
-      <h3>Selected: {selected.kind === "tiles" ? `${selected.tileKind} tiles` : selected.kind}</h3>
-      {#if selected.kind !== "tiles"}
-        <div class="grid2">
-          <label>x <input type="number" bind:value={selected.x} onchange={touch} /></label>
-          <label>y <input type="number" bind:value={selected.y} onchange={touch} /></label>
-          <label>w <input type="number" min="2" bind:value={selected.w} onchange={touch} /></label>
-          <label>h <input type="number" min="2" bind:value={selected.h} onchange={touch} /></label>
+  <div class="workspace">
+    <aside class="pane left">
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Tools</span>
         </div>
-      {:else}
-        <p class="hint">Tap cells with the {selected.tileKind} tool to grow or shrink this piece.</p>
-      {/if}
+        <div class="palette">
+          {#each ["select", "button", "infobox", "slot", "erase", "text", "panel", "well", "hotspot"] as candidate}
+            <button
+              class="tool"
+              class:active={tool === candidate && !pendingComponent}
+              onclick={() => { tool = candidate as Tool; pendingComponent = null; }}
+            >{candidate}</button>
+          {/each}
+        </div>
+        <p class="hint">Button and infobox grow tile by tile: tap a cell, then the next.</p>
+      </section>
 
-      {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "panel" || (selected.kind === "tiles" && selected.tileKind === "button")}
-        <label class="row">label <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextSize(selected!); touch(); }} /></label>
-      {/if}
-
-      {#if selected.kind === "infobox" || (selected.kind === "tiles" && selected.tileKind === "infobox")}
-        <h3>Lines <span class="hint">each with its own colour</span></h3>
-        {#each selected.lines ?? [] as line, index}
-          <div class="line-row">
-            <input value={line} oninput={(event) => setLine(index, (event.target as HTMLInputElement).value)} />
-            <input
-              type="color"
-              value={selected.lineColors?.[index] ?? selected.textColor ?? "#E6E2DA"}
-              oninput={(event) => setLineColor(index, (event.target as HTMLInputElement).value.toUpperCase())}
-            />
-            <button class="mini danger" onclick={() => removeLine(index)}>×</button>
-          </div>
-        {/each}
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Library</span>
+          <span class="count">{library.length}</span>
+        </div>
+        <ul class="list">
+          {#each library as component}
+            <li class="layer-row">
+              <button
+                class="row-btn"
+                class:active={pendingComponent?.id === component.id}
+                onclick={() => { pendingComponent = component; statusLine = `tap the canvas to place ${component.name}`; }}
+              >
+                <span class="truncate">{component.kind === "sprite" ? "🖼" : "🧩"} {component.name}</span>
+                <span class="trail">{component.w}×{component.h}</span>
+              </button>
+              <button
+                class="btn sm danger"
+                aria-label={`delete ${component.name}`}
+                title="Delete from the library"
+                onclick={() => removeComponent(component)}
+              >×</button>
+            </li>
+          {/each}
+          {#if library.length === 0}
+            <li class="hint">Nothing saved yet — tick some layers below, name them, and save.</li>
+          {/if}
+        </ul>
         <div class="row2">
-          <button onclick={addLine}>+ line</button>
-          <label>gap
-            <select value={selected.lineGap ?? 2} onchange={(event) => { selected!.lineGap = Number((event.target as HTMLSelectElement).value) as 2 | 3 | 4; touch(); }}>
-              <option value={2}>2px</option>
-              <option value={3}>3px</option>
-              <option value={4}>4px</option>
-            </select>
-          </label>
-          <label>size
-            <select value={selected.textScale ?? 2} onchange={(event) => { selected!.textScale = Number((event.target as HTMLSelectElement).value) as 1 | 2; touch(); }}>
-              <option value={1}>1×</option>
-              <option value={2}>2× (standard)</option>
-            </select>
-          </label>
+          <input placeholder="component name" bind:value={componentName} />
+          <button class="btn sm" onclick={saveSelectionAsComponent}>Save ✓</button>
         </div>
-      {/if}
+        <button class="btn block sm" onclick={() => fileInput?.click()}>Import PNG…</button>
+        <input class="hidden" type="file" accept="image/png" bind:this={fileInput} onchange={importSpritePng} />
+      </section>
 
-      {#if hasText}
-        <div class="grid2" style="margin-top:0.4rem">
-          <label>font
-            <select value={selected.font ?? "minecraft"} onchange={(event) => { selected!.font = (event.target as HTMLSelectElement).value as "minecraft" | "mono5"; retextSize(selected!); touch(); }}>
-              <option value="minecraft">minecraft</option>
-              <option value="mono5">mono 5×5</option>
-            </select>
-          </label>
-          <label>shadow
-            <select value={selected.shadow ?? "none"} onchange={(event) => { selected!.shadow = (event.target as HTMLSelectElement).value as ShadowDir; touch(); }}>
-              {#each SHADOW_DIRS as dir}<option value={dir}>{dir}</option>{/each}
-            </select>
-          </label>
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Layers</span>
+          <span class="count">{project.elements.length}</span>
         </div>
-      {/if}
-
-      <div class="grid2 colors">
-        {#if !["text", "sprite", "slot"].includes(selected.kind) && !(selected.kind === "tiles" && selected.tileKind === "infobox") && selected.kind !== "infobox"}
-          <label>fill <input type="color" value={selected.color ?? "#C6C6C6"} oninput={(event) => { selected!.color = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+        <ul class="list">
+          {#each project.elements as element}
+            <li class="layer-row">
+              <input type="checkbox" checked={checked.has(element.id)} onchange={() => toggleChecked(element.id)} />
+              <button class="row-btn" class:active={selectedId === element.id} onclick={() => (selectedId = element.id)}>
+                <span class="truncate">
+                  {element.kind === "tiles" ? `${element.tileKind} ×${element.cells?.length ?? 0}` : element.kind}{element.label ? ` “${element.label}”` : ""}
+                </span>
+                <span class="trail">{element.x},{element.y}</span>
+              </button>
+            </li>
+          {/each}
+          {#if project.elements.length === 0}
+            <li class="hint">Pick button or infobox, then tap the grid — each tap grows the piece.</li>
+          {/if}
+        </ul>
+        {#if project.elements.length > 0}
+          <p class="hint">A ticked layer joins the next saved component.</p>
         {/if}
-        {#if hasText}
-          <label>text <input type="color" value={selected.textColor ?? "#FFFFFF"} oninput={(event) => { selected!.textColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
-        {/if}
-      </div>
+      </section>
 
-      {#if selected.kind === "button" || (selected.kind === "tiles" && selected.tileKind === "button")}
-        <label class="row"><input type="checkbox" bind:checked={selected.pressed} onchange={touch} /> pressed</label>
-      {/if}
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Hotspots</span>
+          <span class="count">{project.hotspots.length}</span>
+        </div>
+        <ul class="list">
+          {#each project.hotspots as hotspot}
+            <li class="hotspot-row">
+              <button
+                class="row-btn"
+                class:active={activeHotspot === hotspot.id}
+                onclick={() => { activeHotspot = hotspot.id; tool = "hotspot"; }}
+              >
+                <span class="truncate">
+                  <span class="swatch" style:background={ROLE_COLOURS[hotspot.role] ?? "#aaa"}></span>
+                  {hotspot.id}
+                </span>
+                <span class="trail">{hotspot.slots.length}</span>
+              </button>
+              <select bind:value={hotspot.role} onchange={touch}>
+                {#each Object.keys(ROLE_COLOURS) as role}<option>{role}</option>{/each}
+              </select>
+            </li>
+          {/each}
+        </ul>
+        <button class="btn block sm" onclick={addHotspot}>+ Hotspot group</button>
+      </section>
+    </aside>
 
-      <div class="nudge">
-        {#if selected.kind !== "tiles"}
-          <button onclick={() => nudge(0, -1)} aria-label="up">▲</button>
-          <div>
-            <button onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
-            <button onclick={() => nudge(1, 0)} aria-label="right">▶</button>
+    <section class="stage">
+      <canvas
+        bind:this={canvas}
+        onpointerdown={onPointerDown}
+        onpointermove={onPointerMove}
+        onpointerup={onPointerUp}
+      ></canvas>
+    </section>
+
+    <aside class="pane right">
+      {#if selected}
+        <section class="card">
+          <div class="card-head">
+            <span class="label-mono">Selected</span>
+            <span class="chip">{selected.kind === "tiles" ? selected.tileKind + " tiles" : selected.kind}</span>
           </div>
-          <button onclick={() => nudge(0, 1)} aria-label="down">▼</button>
+
+          {#if selected.kind !== "tiles"}
+            <div class="grid2">
+              <label class="field"><span>x</span><input type="number" bind:value={selected.x} onchange={touch} /></label>
+              <label class="field"><span>y</span><input type="number" bind:value={selected.y} onchange={touch} /></label>
+              <label class="field"><span>w</span><input type="number" min="2" bind:value={selected.w} onchange={touch} /></label>
+              <label class="field"><span>h</span><input type="number" min="2" bind:value={selected.h} onchange={touch} /></label>
+            </div>
+          {:else}
+            <p class="hint">Tap cells with the {selected.tileKind} tool to grow or shrink this piece.</p>
+          {/if}
+
+          {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "panel" || (selected.kind === "tiles" && selected.tileKind === "button")}
+            <label class="field top">
+              <span>label</span>
+              <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextSize(selected!); touch(); }} />
+            </label>
+          {/if}
+
+          {#if selected.kind === "infobox" || (selected.kind === "tiles" && selected.tileKind === "infobox")}
+            <div class="card-head top">
+              <span class="label-mono">Lines</span>
+              <span class="hint">one colour each</span>
+            </div>
+            {#each selected.lines ?? [] as line, index}
+              <div class="line-row">
+                <input value={line} oninput={(event) => setLine(index, (event.target as HTMLInputElement).value)} />
+                <input
+                  type="color"
+                  value={selected.lineColors?.[index] ?? selected.textColor ?? "#E6E2DA"}
+                  oninput={(event) => setLineColor(index, (event.target as HTMLInputElement).value.toUpperCase())}
+                />
+                <button class="btn sm danger" onclick={() => removeLine(index)} aria-label="remove line">×</button>
+              </div>
+            {/each}
+            <div class="row2">
+              <button class="btn sm" onclick={addLine}>+ line</button>
+              <label class="field"><span>gap</span>
+                <select value={selected.lineGap ?? 2} onchange={(event) => { selected!.lineGap = Number((event.target as HTMLSelectElement).value) as 2 | 3 | 4; touch(); }}>
+                  <option value={2}>2px</option>
+                  <option value={3}>3px</option>
+                  <option value={4}>4px</option>
+                </select>
+              </label>
+              <label class="field"><span>size</span>
+                <select value={selected.textScale ?? 2} onchange={(event) => { selected!.textScale = Number((event.target as HTMLSelectElement).value) as 1 | 2; touch(); }}>
+                  <option value={1}>1×</option>
+                  <option value={2}>2× (standard)</option>
+                </select>
+              </label>
+            </div>
+          {/if}
+
+          {#if hasText}
+            <div class="grid2 top">
+              <label class="field"><span>font</span>
+                <select value={selected.font ?? "minecraft"} onchange={(event) => { selected!.font = (event.target as HTMLSelectElement).value as "minecraft" | "mono5"; retextSize(selected!); touch(); }}>
+                  <option value="minecraft">minecraft</option>
+                  <option value="mono5">mono 5×5</option>
+                </select>
+              </label>
+              <label class="field"><span>shadow</span>
+                <select value={selected.shadow ?? "none"} onchange={(event) => { selected!.shadow = (event.target as HTMLSelectElement).value as ShadowDir; touch(); }}>
+                  {#each SHADOW_DIRS as dir}<option value={dir}>{dir}</option>{/each}
+                </select>
+              </label>
+            </div>
+          {/if}
+
+          <div class="grid2 top">
+            {#if !["text", "sprite", "slot"].includes(selected.kind) && !(selected.kind === "tiles" && selected.tileKind === "infobox") && selected.kind !== "infobox"}
+              <label class="field"><span>fill</span><input type="color" value={selected.color ?? "#C6C6C6"} oninput={(event) => { selected!.color = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+            {/if}
+            {#if hasText}
+              <label class="field"><span>text</span><input type="color" value={selected.textColor ?? "#FFFFFF"} oninput={(event) => { selected!.textColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+            {/if}
+          </div>
+
+          {#if selected.kind === "button" || (selected.kind === "tiles" && selected.tileKind === "button")}
+            <label class="check"><input type="checkbox" bind:checked={selected.pressed} onchange={touch} /> pressed</label>
+          {/if}
+
+          <div class="nudge">
+            {#if selected.kind !== "tiles"}
+              <div class="pad">
+                <button class="btn sm" onclick={() => nudge(0, -1)} aria-label="up">▲</button>
+                <div class="pad-row">
+                  <button class="btn sm" onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
+                  <button class="btn sm" onclick={() => nudge(1, 0)} aria-label="right">▶</button>
+                </div>
+                <button class="btn sm" onclick={() => nudge(0, 1)} aria-label="down">▼</button>
+              </div>
+            {/if}
+            <button class="btn sm danger" onclick={removeSelected}>Delete</button>
+          </div>
+        </section>
+      {:else}
+        <div class="empty">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M4 4h7v7H4zM13 13h7v7h-7z" />
+            <path d="M13 4h7v7h-7z" opacity="0.4" />
+          </svg>
+          <p>Nothing selected. Pick a tool and tap the grid, or tap a layer.</p>
+        </div>
+      {/if}
+
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Screen</span></div>
+        <div class="grid2">
+          <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={project.rows} /></label>
+          <label class="field"><span>shift</span><input type="number" bind:value={project.shift} /></label>
+          <label class="field"><span>ascent</span><input type="number" bind:value={project.ascent} /></label>
+          <label class="field"><span>zoom</span><input type="number" min="1" max="8" bind:value={zoom} /></label>
+        </div>
+        <label class="field top"><span>codepoint</span><input bind:value={project.codepoint} /></label>
+        <label class="field top"><span>fallback title</span><input bind:value={project.fallbackTitle} /></label>
+        <label class="check"><input type="checkbox" bind:checked={guides} /> guides</label>
+        <label class="check"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
+        <p class="hint">
+          Erase tool: tap any part of the window — a slot, the top band, a margin — and it
+          becomes a transparent hole; the contour redraws around it. Tap again to restore.
+          Holes: <b>{project.holes?.length ?? 0}</b>.
+        </p>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Measured</span></div>
+        <dl class="kv">
+          <div><dt>Advance</dt><dd>{baked.advance}</dd></div>
+          <div>
+            <dt>Strays</dt>
+            <dd>
+              {#if baked.straysRemoved > 0}
+                <span class="badge warn">{baked.straysRemoved} stripped</span>
+              {:else}
+                <span class="badge ok">none</span>
+              {/if}
+            </dd>
+          </div>
+        </dl>
+        {#if !fonts.minecraft}
+          <p class="hint bad">Pack font not loaded — the minecraft face falls back to mono.</p>
         {/if}
-        <button class="danger" onclick={removeSelected}>delete</button>
-      </div>
-    {/if}
+        {#if !infoboxSkin}
+          <p class="hint bad">No infobox skin in the profile — using the procedural stand-in.</p>
+        {/if}
+      </section>
 
-    <h3>Screen</h3>
-    <div class="grid2">
-      <label>rows <input type="number" min="1" max="6" bind:value={project.rows} /></label>
-      <label>shift <input type="number" bind:value={project.shift} /></label>
-      <label>ascent <input type="number" bind:value={project.ascent} /></label>
-      <label>zoom <input type="number" min="1" max="8" bind:value={zoom} /></label>
-    </div>
-    <label class="row">codepoint <input bind:value={project.codepoint} /></label>
-    <label class="row">fallback <input bind:value={project.fallbackTitle} /></label>
-    <label class="row"><input type="checkbox" bind:checked={guides} /> guides</label>
-    <label class="row"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
-    <p class="hint">
-      erase tool: tap any part of the window — a slot, the top band, a margin — and it
-      becomes a transparent hole; the contour redraws around it. Tap again to restore.
-      Holes: {project.holes?.length ?? 0}.
-    </p>
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Copy out</span></div>
+        <div class="stack">
+          <button class="btn block" onclick={() => copy(visualsYmlBlock(screenConfig), "visuals yml")}>Visuals yml</button>
+          <button class="btn block" onclick={() => copy(configYmlBlock(`${project.module}.gui`, screenConfig), "config yml")}>Config yml</button>
+          <button class="btn block" onclick={() => {
+            const files = scaffoldFiles(scaffoldInput());
+            const text = Object.entries(files).map(([path, body]) => `// ==== ${path}\n${body}`).join("\n");
+            copy(text + "\n" + advanceTable(scaffoldInput()), "Java scaffold");
+          }}>Java scaffold</button>
+        </div>
+      </section>
 
-    <h3>Measured</h3>
-    <p class="measure">
-      advance <b>{baked.advance}</b> · strays stripped <b class={baked.straysRemoved ? "warn" : ""}>{baked.straysRemoved}</b>
-      {#if !fonts.minecraft}<br /><span class="warn">pack font not loaded — minecraft face falls back to mono</span>{/if}
-      {#if !infoboxSkin}<br /><span class="warn">no infobox skin in profile — using the procedural stand-in</span>{/if}
-    </p>
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Push</span>
+          <span class="badge info nodot">dev</span>
+        </div>
+        <label class="field"><span>pack path</span><input bind:value={deployPath} placeholder="…/.slotify-staging/pack" /></label>
+        <div class="grid2 top">
+          <label class="field"><span>host</span><input bind:value={rconHost} /></label>
+          <label class="field"><span>port</span><input type="number" bind:value={rconPort} /></label>
+        </div>
+        <label class="field top"><span>password</span><input type="password" bind:value={rconPassword} /></label>
+        <div class="stack top">
+          <button class="btn block" onclick={writeDeployFiles}>Write files</button>
+          <button class="btn block" onclick={runReload} disabled={!rconHost || !rconPassword}>nexo reload pack</button>
+        </div>
+      </section>
 
-    <h3>Export</h3>
-    <div class="actions">
-      <button onclick={saveProject}>Save project</button>
-      <button onclick={exportToPack}>Export to pack-source</button>
-      <button onclick={() => copy(visualsYmlBlock(screenConfig), "visuals yml")}>Copy visuals yml</button>
-      <button onclick={() => copy(configYmlBlock(`${project.module}.gui`, screenConfig), "config yml")}>Copy config yml</button>
-      <button onclick={() => {
-        const files = scaffoldFiles(scaffoldInput());
-        const text = Object.entries(files).map(([path, body]) => `// ==== ${path}\n${body}`).join("\n");
-        copy(text + "\n" + advanceTable(scaffoldInput()), "Java scaffold");
-      }}>Copy Java scaffold</button>
-    </div>
-
-    <h3>Push (dev)</h3>
-    <label class="row">pack path <input bind:value={deployPath} placeholder="…/.slotify-staging/pack" /></label>
-    <div class="grid2">
-      <label>host <input bind:value={rconHost} /></label>
-      <label>port <input type="number" bind:value={rconPort} /></label>
-    </div>
-    <label class="row">password <input type="password" bind:value={rconPassword} /></label>
-    <div class="actions">
-      <button onclick={writeDeployFiles}>Write files</button>
-      <button onclick={runReload} disabled={!rconHost || !rconPassword}>nexo reload pack</button>
-    </div>
-
-    {#if statusLine}<p class="status">{statusLine}</p>{/if}
-  </aside>
+      {#if statusLine}
+        <p class="status">{statusLine}</p>
+      {/if}
+    </aside>
+  </div>
 </div>
 
 <style>
-  .editor {
-    display: grid;
-    grid-template-columns: 260px 1fr 300px;
-    height: 100vh;
-  }
-
-  @media (max-width: 980px) {
-    .editor {
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: minmax(40vh, 1fr) minmax(0, 60vh);
-      height: auto;
-    }
-    .stage { grid-column: 1 / -1; grid-row: 1; }
-    .tools, .panel { grid-row: 2; }
-  }
-
-  .tools, .panel {
-    overflow-y: auto;
-    padding: 0.75rem;
-    background: #1c1c21;
-  }
-  .tools { border-right: 1px solid #2c2c33; }
-  .panel { border-left: 1px solid #2c2c33; }
-
-  .stage {
-    overflow: auto;
-    display: grid;
-    place-items: center;
-    background: repeating-conic-gradient(#1b1b1f 0% 25%, #202026 0% 50%) 0 0 / 24px 24px;
+  /*
+   * Touch-first: a drag on the canvas moves an element, it never scrolls the pane. Only
+   * the editor claims the gesture — the viewer's stage still pans with a finger.
+   */
+  .stage,
+  .stage canvas {
     touch-action: none;
   }
-  canvas { image-rendering: pixelated; touch-action: none; }
 
-  h2 { font-size: 0.95rem; margin: 0.5rem 0; word-break: break-all; }
-  h3 { font-size: 0.8rem; margin: 0.9rem 0 0.3rem; color: #b8b2a7; text-transform: uppercase; letter-spacing: 0.04em; }
-  h3 .hint { text-transform: none; letter-spacing: 0; }
-
-  .palette { display: flex; flex-wrap: wrap; gap: 0.3rem; }
-  button {
-    background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 6px;
-    padding: 0.45rem 0.6rem; font: inherit; cursor: pointer; min-height: 34px;
+  /* The screen's identity in the top bar, where a document title belongs. */
+  .ident {
+    display: grid;
+    gap: 0.05rem;
+    min-width: 0;
   }
-  .palette button.active, .layers button.active { background: #3b2a1a; color: #ffc65c; border-color: #7a5220; }
-  .danger { border-color: #7a2a20; color: #ff9c8b; }
-  .mini { min-height: 30px; padding: 0.2rem 0.5rem; }
 
-  .layers { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
-  .layers button { width: 100%; text-align: left; }
-  .layer-row { display: flex; align-items: center; gap: 0.3rem; }
-  .layer-row input[type="checkbox"] { width: auto; }
-  .layer-row button { flex: 1; }
-  .hotspot-row { display: flex; gap: 0.3rem; }
-  .hotspot-row button { flex: 1; display: flex; align-items: center; gap: 0.4rem; }
-  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-  .hint { color: #77726a; font-size: 0.78rem; }
-  .hidden { display: none; }
-  .row2 { display: flex; gap: 0.3rem; margin: 0.3rem 0; }
-  .row2 input { flex: 1; }
-
-  .line-row { display: flex; gap: 0.25rem; margin-bottom: 0.25rem; align-items: center; }
-  .line-row input[type="color"] { width: 38px; flex: none; }
-
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; }
-  .colors { margin-top: 0.4rem; }
-  label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
-  label.row { margin: 0.3rem 0; }
-  input, textarea {
-    background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px;
-    padding: 0.3rem 0.4rem; width: 100%; min-width: 0; font: inherit;
+  .ident h2 {
+    font-size: 0.9rem;
+    font-weight: 800;
+    line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  input[type="checkbox"] { width: auto; }
-  input[type="color"] { padding: 0.1rem; height: 30px; }
-  select { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; min-width: 0; }
 
-  .nudge { display: grid; justify-items: center; gap: 0.25rem; margin-top: 0.4rem; }
-  .nudge div { display: flex; gap: 1.6rem; }
-  .nudge button { width: 44px; height: 38px; }
+  .chips {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
 
-  .actions { display: grid; gap: 0.3rem; }
-  .measure { font-size: 0.85rem; }
-  .warn { color: #ff9c5b; }
-  .status { font-size: 0.78rem; color: #9ad17e; word-break: break-all; }
+  /* Nine tools, wrapped: a pill row would scroll and hide half of them. */
+  .palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .tool {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--ink-soft);
+    padding: 0.28rem 0.55rem;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color 0.12s,
+      border-color 0.12s,
+      color 0.12s;
+  }
+
+  .tool:hover {
+    border-color: var(--line-strong);
+    background: var(--canvas);
+    color: var(--ink);
+  }
+
+  .tool.active {
+    border-color: transparent;
+    background: var(--primary);
+    color: #fff;
+    box-shadow: var(--shadow-red);
+  }
+
+  .truncate {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .layer-row,
+  .hotspot-row {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .layer-row .row-btn,
+  .hotspot-row .row-btn {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .hotspot-row select {
+    flex: 0 0 5.5rem;
+  }
+
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex: 0 0 auto;
+  }
+
+  .hidden {
+    display: none;
+  }
+
+  .row2 {
+    display: flex;
+    align-items: end;
+    gap: 0.3rem;
+    margin: 0.4rem 0 0.3rem;
+  }
+
+  .row2 > input,
+  .row2 > label {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .line-row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .line-row input[type="color"] {
+    flex: 0 0 34px;
+  }
+
+  .top {
+    margin-top: 0.45rem;
+  }
+
+  /* One pixel at a time, with a target big enough for a finger. */
+  .nudge {
+    display: grid;
+    justify-items: center;
+    gap: 0.3rem;
+    margin-top: 0.6rem;
+  }
+
+  .pad {
+    display: grid;
+    justify-items: center;
+    gap: 0.2rem;
+  }
+
+  .pad-row {
+    display: flex;
+    gap: 1.4rem;
+  }
+
+  .pad .btn {
+    width: 42px;
+  }
+
+  .status {
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid color-mix(in srgb, var(--success) 30%, var(--line));
+    border-radius: var(--radius);
+    background: var(--success-soft);
+    color: color-mix(in srgb, var(--success) 80%, var(--ink));
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 1180px) {
+    .chips {
+      display: none;
+    }
+  }
 </style>

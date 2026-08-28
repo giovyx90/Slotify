@@ -260,6 +260,18 @@ export async function saveComponent(
   }
 }
 
+/** Removes a component from the library — its JSON, and the PNG beside it if a sprite. */
+export async function deleteComponent(
+  backend: FsBackend,
+  root: string,
+  component: LibraryComponent,
+): Promise<void> {
+  await backend.delete(joinPath(root, COMPONENTS_DIR, `${component.id}.json`));
+  if (component.kind === "sprite") {
+    await backend.delete(joinPath(root, COMPONENTS_DIR, `${component.id}.png`));
+  }
+}
+
 export async function loadSpriteRaster(
   backend: FsBackend,
   root: string,

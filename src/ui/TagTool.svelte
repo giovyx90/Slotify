@@ -98,122 +98,149 @@
   }
 </script>
 
-<div class="tagtool">
-  <aside class="controls">
-    <button onclick={onExit}>← viewer</button>
-    <h2>Tag generator</h2>
+<div class="app">
+  <header class="topbar">
+    <button class="btn ghost" onclick={onExit}>← Viewer</button>
 
-    <label class="row">text <input bind:value={text} /></label>
-    <div class="grid2">
-      <label>font
-        <select bind:value={fontChoice}>
-          <option value="mono5">mono 5×5</option>
-          {#if fonts.minecraft}<option value="minecraft">minecraft</option>{/if}
-        </select>
-      </label>
-      <label>scale <input type="number" min="1" max="8" bind:value={scale} /></label>
-      <label>spacing <input type="number" min="-1" max="4" bind:value={letterSpacing} /></label>
+    <div class="ident">
+      <span class="label-mono">Tag generator</span>
+      <h2>{text || "untitled"}</h2>
     </div>
 
-    <h3>Fill</h3>
-    <div class="grid2">
-      <label>top <input type="color" bind:value={fill} /></label>
-      <label class="gap"><input type="checkbox" bind:checked={useGradient} /> gradient</label>
-      {#if useGradient}
-        <label>bottom <input type="color" bind:value={fillTo} /></label>
-      {/if}
-    </div>
+    <div class="spacer"></div>
 
-    <h3>Effects</h3>
-    <div class="grid2">
-      <label class="gap"><input type="checkbox" bind:checked={useOutline} /> outline</label>
-      {#if useOutline}<label><input type="color" bind:value={outline} /></label>{/if}
-      <label class="gap"><input type="checkbox" bind:checked={useShadow} /> shadow</label>
-      {#if useShadow}
-        <label><input type="color" bind:value={shadow} /></label>
-        <label>dir
-          <select bind:value={shadowDir}>
-            {#each Object.keys(SHADOW_OFFSETS) as dir}<option value={dir}>{dir}</option>{/each}
-          </select>
-        </label>
-      {/if}
-    </div>
-
-    <h3>Background</h3>
-    <label class="gap"><input type="checkbox" bind:checked={useBackground} /> plate</label>
-    {#if useBackground}
-      <div class="grid2">
-        <label>fill <input type="color" bind:value={bgFill} /></label>
-        <label>border <input type="color" bind:value={bgBorder} /></label>
-        <label>padding <input type="number" min="0" max="8" bind:value={padding} /></label>
-      </div>
-    {/if}
-
-    <h3>Output {#if tag}<span class="hint">{tag.width}×{tag.height}px</span>{/if}</h3>
-    <div class="actions">
-      <button onclick={download}>Download PNG</button>
-      <button onclick={saveToLibrary}>Save to library (sprite)</button>
-    </div>
-
-    {#if statusLine}<p class="status">{statusLine}</p>{/if}
-  </aside>
-
-  <section class="stage">
     {#if tag}
-      <canvas bind:this={canvas}></canvas>
-    {:else}
-      <p class="hint">Type something.</p>
+      <span class="chip">{tag.width}×{tag.height} px</span>
     {/if}
-  </section>
+    <button class="btn" onclick={saveToLibrary}>Save to library</button>
+    <button class="btn primary" onclick={download}>Download PNG</button>
+  </header>
+
+  <div class="workspace two">
+    <aside class="pane left">
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Text</span></div>
+        <label class="field"><span>words</span><input bind:value={text} /></label>
+        <div class="grid2 top">
+          <label class="field"><span>font</span>
+            <select bind:value={fontChoice}>
+              <option value="mono5">mono 5×5</option>
+              {#if fonts.minecraft}<option value="minecraft">minecraft</option>{/if}
+            </select>
+          </label>
+          <label class="field"><span>scale</span><input type="number" min="1" max="8" bind:value={scale} /></label>
+          <label class="field"><span>spacing</span><input type="number" min="-1" max="4" bind:value={letterSpacing} /></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Fill</span></div>
+        <div class="grid2">
+          <label class="field"><span>top</span><input type="color" bind:value={fill} /></label>
+          {#if useGradient}
+            <label class="field"><span>bottom</span><input type="color" bind:value={fillTo} /></label>
+          {/if}
+        </div>
+        <label class="check"><input type="checkbox" bind:checked={useGradient} /> vertical gradient</label>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Effects</span></div>
+        <label class="check"><input type="checkbox" bind:checked={useOutline} /> outline</label>
+        {#if useOutline}
+          <label class="field"><span>outline colour</span><input type="color" bind:value={outline} /></label>
+        {/if}
+        <label class="check"><input type="checkbox" bind:checked={useShadow} /> shadow</label>
+        {#if useShadow}
+          <div class="grid2">
+            <label class="field"><span>colour</span><input type="color" bind:value={shadow} /></label>
+            <label class="field"><span>direction</span>
+              <select bind:value={shadowDir}>
+                {#each Object.keys(SHADOW_OFFSETS) as dir}<option value={dir}>{dir}</option>{/each}
+              </select>
+            </label>
+          </div>
+        {/if}
+      </section>
+
+      <section class="card">
+        <div class="card-head"><span class="label-mono">Plate</span></div>
+        <label class="check"><input type="checkbox" bind:checked={useBackground} /> draw a background plate</label>
+        {#if useBackground}
+          <div class="grid2 top">
+            <label class="field"><span>fill</span><input type="color" bind:value={bgFill} /></label>
+            <label class="field"><span>border</span><input type="color" bind:value={bgBorder} /></label>
+            <label class="field"><span>padding</span><input type="number" min="0" max="8" bind:value={padding} /></label>
+          </div>
+        {/if}
+      </section>
+
+      {#if statusLine}
+        <p class="status">{statusLine}</p>
+      {/if}
+    </aside>
+
+    <section class="stage">
+      {#if tag}
+        <canvas bind:this={canvas}></canvas>
+      {:else}
+        <div class="empty">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M4 7V5h16v2M9 19h6M12 5v14" />
+          </svg>
+          <p>Type something on the left. It is rendered in the pack's own bitmap font, at the pixel — no anti-aliasing, nothing to clean up afterwards.</p>
+        </div>
+      {/if}
+    </section>
+  </div>
 </div>
 
 <style>
-  .tagtool {
+  .ident {
     display: grid;
-    grid-template-columns: 300px 1fr;
-    height: 100vh;
+    gap: 0.05rem;
+    min-width: 0;
   }
 
-  @media (max-width: 700px) {
-    .tagtool { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .ident h2 {
+    font-size: 0.9rem;
+    font-weight: 800;
+    line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .controls {
-    overflow-y: auto;
-    padding: 0.75rem;
-    background: #1c1c21;
-    border-right: 1px solid #2c2c33;
+  /* One rail of controls, one stage: no inspector to put on the right. */
+  .workspace.two {
+    grid-template-columns: 320px minmax(0, 1fr);
   }
 
-  .stage {
-    display: grid;
-    place-items: center;
-    overflow: auto;
-    background: repeating-conic-gradient(#1b1b1f 0% 25%, #202026 0% 50%) 0 0 / 24px 24px;
+  .top {
+    margin-top: 0.45rem;
   }
-  canvas { image-rendering: pixelated; }
 
-  h2 { font-size: 1rem; margin: 0.5rem 0; }
-  h3 { font-size: 0.8rem; margin: 0.9rem 0 0.3rem; color: #b8b2a7; text-transform: uppercase; letter-spacing: 0.04em; }
-  h3 .hint { text-transform: none; letter-spacing: 0; }
-  .hint { color: #77726a; font-size: 0.8rem; }
-
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; align-items: center; }
-  label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
-  label.row { margin: 0.3rem 0; }
-  label.gap { min-height: 30px; }
-  input {
-    background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px;
-    padding: 0.3rem 0.4rem; width: 100%; min-width: 0; font: inherit;
+  .status {
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid color-mix(in srgb, var(--success) 30%, var(--line));
+    border-radius: var(--radius);
+    background: var(--success-soft);
+    color: color-mix(in srgb, var(--success) 80%, var(--ink));
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    overflow-wrap: anywhere;
   }
-  input[type="checkbox"] { width: auto; }
-  input[type="color"] { padding: 0.1rem; height: 30px; }
-  select { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; min-width: 0; }
 
-  button {
-    background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 6px;
-    padding: 0.45rem 0.6rem; font: inherit; cursor: pointer; min-height: 34px;
+  @media (max-width: 980px) {
+    .workspace.two {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(40vh, 1fr) auto;
+    }
+
+    .workspace.two .pane {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
   }
-  .actions { display: grid; gap: 0.3rem; }
-  .status { font-size: 0.78rem; color: #9ad17e; }
 </style>

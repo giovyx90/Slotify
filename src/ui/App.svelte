@@ -8,6 +8,7 @@
   import { buildMono5Font } from "../engine/mono5";
   import type { BitmapFont } from "../engine/textFont";
   import { detectBackend, joinPath } from "../platform/fs";
+  import Mark from "./Mark.svelte";
   import Editor from "./Editor.svelte";
   import Preview from "./Preview.svelte";
   import TagTool from "./TagTool.svelte";
@@ -225,385 +226,351 @@
     onExit={() => (mode = "viewer")}
   />
 {:else}
-<main>
-  <aside class="sidebar">
-    <header class="brand">
-      <img src="/art/app-icon.svg" alt="" width="28" height="28" />
-      <h1>Slotify</h1>
-    </header>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <Mark />
+      <span class="wordmark">Slotify</span>
+      <span class="tagline">GUI studio</span>
+    </div>
 
     {#if pack}
-      <p class="meta">{pack.fonts.length} fonts · {pack.registry.glyphs.size} glyphs · {pack.screens.length} sheets</p>
+      <div class="seg">
+        <button class="active">Viewer</button>
+        <button onclick={() => (mode = "tag")}>Tag generator</button>
+      </div>
+    {/if}
 
-      <button class="primary" onclick={newScreen}>+ New screen</button>
-      <button class="primary" onclick={() => (mode = "tag")}>Aa Tag generator</button>
+    <div class="spacer"></div>
 
-      {#if savedProjects.length > 0}
-        <details class="projects" open>
-          <summary>Projects <span class="count">{savedProjects.length}</span></summary>
-          <ul>
-            {#each savedProjects as name}
-              <li><button onclick={() => openProject(name)}>{name.replace(".guiproj.json", "")}</button></li>
-            {/each}
-          </ul>
-        </details>
-      {/if}
+    {#if pack}
+      <div class="chips">
+        <span class="chip"><b>{pack.fonts.length}</b> fonts</span>
+        <span class="chip"><b>{pack.registry.glyphs.size}</b> glyphs</span>
+        <span class="chip"><b>{pack.screens.length}</b> sheets</span>
+        {#if pack.collisions.length > 0}
+          <span class="badge warn">{pack.collisions.length} collision{pack.collisions.length === 1 ? "" : "s"}</span>
+        {:else}
+          <span class="badge ok">no collisions</span>
+        {/if}
+      </div>
+      <button class="btn primary" onclick={newScreen}>+ New screen</button>
+    {/if}
+  </header>
 
-      {#if pack.collisions.length > 0}
-        <details class="collisions" open>
-          <summary>⚠ {pack.collisions.length} codepoint collision{pack.collisions.length === 1 ? "" : "s"}</summary>
-          <ul>
-            {#each pack.collisions as collision}
-              <li>{describeCollision(collision)}</li>
-            {/each}
-          </ul>
-        </details>
-      {/if}
-
-      <nav>
-        {#each folders as group}
-          <details open={selected?.folder === group.folder}>
-            <summary>{group.folder} <span class="count">{group.screens.length}</span></summary>
-            <ul>
-              {#each group.screens as screen}
+  <div class="workspace">
+    <aside class="pane left">
+      {#if pack}
+        {#if savedProjects.length > 0}
+          <section class="card">
+            <div class="card-head">
+              <span class="label-mono">Projects</span>
+              <span class="count">{savedProjects.length}</span>
+            </div>
+            <ul class="list">
+              {#each savedProjects as name}
                 <li>
-                  <button
-                    class:active={selected?.codepoint === screen.codepoint}
-                    onclick={() => select(screen)}
-                  >
-                    {screen.name}
-                    <span class="cp">{formatCodepoint(screen.codepoint)}</span>
+                  <button class="row-btn" onclick={() => openProject(name)}>
+                    <span class="truncate">{name.replace(".guiproj.json", "")}</span>
+                    <span class="trail">open</span>
                   </button>
                 </li>
               {/each}
             </ul>
-          </details>
-        {/each}
-      </nav>
-    {:else}
-      <p class="meta">{status}</p>
-    {/if}
-  </aside>
+          </section>
+        {/if}
 
-  <section class="stage-wrap">
+        {#if pack.collisions.length > 0}
+          <section class="card alarm">
+            <details open>
+              <summary>
+                <span class="label-mono">Codepoint collisions</span>
+                <span class="count">{pack.collisions.length}</span>
+              </summary>
+              <ul class="collisions">
+                {#each pack.collisions as collision}
+                  <li>{describeCollision(collision)}</li>
+                {/each}
+              </ul>
+            </details>
+          </section>
+        {/if}
+
+        <section class="card screens">
+          <div class="card-head">
+            <span class="label-mono">Screens</span>
+            <span class="count">{pack.screens.length}</span>
+          </div>
+          <nav>
+            {#each folders as group}
+              <details open={selected?.folder === group.folder}>
+                <summary>
+                  {group.folder}
+                  <span class="count">{group.screens.length}</span>
+                </summary>
+                <ul class="list">
+                  {#each group.screens as screen}
+                    <li>
+                      <button
+                        class="row-btn"
+                        class:active={selected?.codepoint === screen.codepoint}
+                        onclick={() => select(screen)}
+                      >
+                        <span class="truncate">{screen.name}</span>
+                        <span class="trail">{formatCodepoint(screen.codepoint)}</span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              </details>
+            {/each}
+          </nav>
+        </section>
+
+        <p class="root hint">{pack.root}</p>
+      {:else}
+        <section class="card">
+          <span class="label-mono">Pack</span>
+          <p class="hint">{status}</p>
+        </section>
+      {/if}
+    </aside>
+
     {#if missingTexture}
-      <p class="warn big">Texture not found in the pack for {selected?.textureFile} — this is a dangling provider.</p>
+      <section class="stage">
+        <div class="empty">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="3" />
+            <path d="M3 21 21 3" />
+          </svg>
+          <p>
+            No texture in the pack for <span class="mono">{selected?.textureFile}</span>.
+            The font declares a provider that points at nothing — a dangling reference.
+          </p>
+        </div>
+      </section>
     {:else}
       <Preview base={baseSheet} overlays={overlaySheets} {rows} {shift} {zoom} {guides} {hideViewerInventory} />
     {/if}
-  </section>
 
-  <aside class="inspector">
-    {#if selected}
-      <h2>{selected.name}</h2>
-      {#if baseSheet}
-        <button class="primary" onclick={openInEditor}>Open in editor</button>
-      {/if}
-      <dl>
-        <dt>Codepoint</dt>
-        <dd>{formatCodepoint(selected.codepoint)} · {selected.fontFile}</dd>
-        <dt>Texture</dt>
-        <dd>{selected.textureFile}</dd>
-        <dt>Declared ascent</dt>
-        <dd>{selected.ascent} (height {selected.height})</dd>
-      </dl>
-
-      {#if measurements}
-        <dl>
-          <dt>Measured advance</dt>
-          <dd>{measurements.advance} <span class="hint">(rightmost opaque column {measurements.rightmostColumn} + 2)</span></dd>
-          <dt>Stray pixels</dt>
-          <dd class={measurements.strays > 0 ? "warn" : ""}>
-            {measurements.strays}{measurements.strays > 0 ? " — the advance above is wrong until these are stripped" : ""}
-          </dd>
-          <dt>Canvas</dt>
-          <dd class={measurements.is256 ? "" : "warn"}>{measurements.is256 ? "256×256" : "NOT 256×256 — the ascent will scale, not crop"}</dd>
-          {#if ascentCheck}
-            <dt>Implied ascent</dt>
-            <dd class={ascentCheck.matches ? "" : "warn"}>
-              {ascentCheck.implied} (cell on row {ascentCheck.row})
-              {ascentCheck.matches ? "— matches" : `— gui.json declares ${selected.ascent}`}
-            </dd>
+    <aside class="pane right">
+      {#if selected}
+        <section class="card">
+          <div class="card-head">
+            <div class="title">
+              <span class="label-mono">{selected.folder}</span>
+              <h2>{selected.name}</h2>
+            </div>
+            <span class="chip">{formatCodepoint(selected.codepoint)}</span>
+          </div>
+          {#if baseSheet}
+            <button class="btn primary block" onclick={openInEditor}>Open in editor</button>
           {/if}
-        </dl>
-      {/if}
+        </section>
 
-      {#if siblings.length > 0}
-        <h3>Overlays ({selected.folder})</h3>
-        <ul class="overlays">
-          {#each siblings as sibling}
-            <li>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={overlaysOn.has(sibling.codepoint)}
-                  onchange={() => toggleOverlay(sibling)}
-                />
-                {sibling.name}
-              </label>
-            </li>
-          {/each}
-        </ul>
-      {/if}
+        <section class="card">
+          <div class="card-head"><span class="label-mono">Provider</span></div>
+          <dl class="kv">
+            <div><dt>Font</dt><dd>{selected.fontFile}</dd></div>
+            <div><dt>Texture</dt><dd>{selected.textureFile}</dd></div>
+            <div><dt>Ascent</dt><dd>{selected.ascent}</dd></div>
+            <div><dt>Height</dt><dd>{selected.height}</dd></div>
+          </dl>
+        </section>
 
-      <h3>View</h3>
-      <div class="controls">
-        <label>rows <input type="number" min="1" max="6" bind:value={rows} /></label>
-        <label>shift <input type="number" min="-256" max="256" bind:value={shift} /></label>
-        <label>zoom <input type="range" min="1" max="8" bind:value={zoom} /> {zoom}×</label>
-        <label><input type="checkbox" bind:checked={guides} /> guides</label>
-        <label><input type="checkbox" bind:checked={hideViewerInventory} /> hide viewer inventory</label>
-      </div>
-    {:else if pack}
-      <p class="meta">Pick a sheet to see its measurements.</p>
-    {/if}
-  </aside>
-</main>
+        {#if measurements}
+          <section class="card">
+            <div class="card-head"><span class="label-mono">Measured</span></div>
+            <dl class="kv">
+              <div>
+                <dt>Advance</dt>
+                <dd>{measurements.advance}</dd>
+              </div>
+              <div>
+                <dt>Strays</dt>
+                <dd>
+                  {#if measurements.strays > 0}
+                    <span class="badge bad">{measurements.strays} px</span>
+                  {:else}
+                    <span class="badge ok">none</span>
+                  {/if}
+                </dd>
+              </div>
+              <div>
+                <dt>Canvas</dt>
+                <dd>
+                  {#if measurements.is256}
+                    <span class="badge ok">256×256</span>
+                  {:else}
+                    <span class="badge bad">not 256×256</span>
+                  {/if}
+                </dd>
+              </div>
+              {#if ascentCheck}
+                <div>
+                  <dt>Implied ascent</dt>
+                  <dd>
+                    {#if ascentCheck.matches}
+                      <span class="badge ok">{ascentCheck.implied} · matches</span>
+                    {:else}
+                      <span class="badge bad">{ascentCheck.implied} ≠ {selected.ascent}</span>
+                    {/if}
+                  </dd>
+                </div>
+              {/if}
+            </dl>
+            <p class="hint note">
+              Advance is the rightmost opaque column ({measurements.rightmostColumn}) plus two.
+              {#if measurements.strays > 0}
+                <span class="bad">Those stray pixels inflate it — strip them and it will change.</span>
+              {/if}
+              {#if !measurements.is256}
+                <span class="bad">A sheet that is not 256×256 scales instead of cropping.</span>
+              {/if}
+              {#if ascentCheck && !ascentCheck.matches}
+                <span class="bad">
+                  Row {ascentCheck.row} of the artwork implies ascent {ascentCheck.implied}, but
+                  gui.json declares {selected.ascent}: the screen draws off by the difference.
+                </span>
+              {/if}
+            </p>
+          </section>
+        {/if}
+
+        {#if siblings.length > 0}
+          <section class="card">
+            <div class="card-head">
+              <span class="label-mono">Overlays</span>
+              <span class="count">{siblings.length}</span>
+            </div>
+            <ul class="list">
+              {#each siblings as sibling}
+                <li>
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      checked={overlaysOn.has(sibling.codepoint)}
+                      onchange={() => toggleOverlay(sibling)}
+                    />
+                    <span class="truncate">{sibling.name}</span>
+                  </label>
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+
+        <section class="card">
+          <div class="card-head"><span class="label-mono">View</span></div>
+          <div class="grid2">
+            <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={rows} /></label>
+            <label class="field"><span>shift</span><input type="number" min="-256" max="256" bind:value={shift} /></label>
+          </div>
+          <label class="field zoom">
+            <span>zoom · {zoom}×</span>
+            <input type="range" min="1" max="8" bind:value={zoom} />
+          </label>
+          <label class="check"><input type="checkbox" bind:checked={guides} /> guides</label>
+          <label class="check"><input type="checkbox" bind:checked={hideViewerInventory} /> hide viewer inventory</label>
+        </section>
+      {:else if pack}
+        <div class="empty">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="3" />
+            <path d="M9 3v18M15 3v18M3 9h18M3 15h18" />
+          </svg>
+          <p>Pick a sheet on the left to see what the pack actually declares, and what the pixels actually measure.</p>
+        </div>
+      {/if}
+    </aside>
+  </div>
+</div>
 {/if}
 
 <style>
-  :global(body) {
-    margin: 0;
-    background: #141417;
-    color: #e6e2da;
-    font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
-  }
-
-  main {
-    display: grid;
-    grid-template-columns: 270px 1fr 300px;
-    height: 100vh;
-  }
-
-  /* Narrow panes and tablets: stack, keep the preview tallest. */
-  @media (max-width: 980px) {
-    main {
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: minmax(45vh, 1fr) minmax(0, 55vh);
-      height: auto;
-      min-height: 100vh;
-    }
-
-    .stage-wrap {
-      grid-column: 1 / -1;
-      grid-row: 1;
-      min-height: 45vh;
-    }
-
-    .sidebar,
-    .inspector {
-      grid-row: 2;
-      border: 0;
-      border-top: 1px solid #2c2c33;
-    }
-  }
-
-  .sidebar,
-  .inspector {
-    overflow-y: auto;
-    padding: 0.75rem;
-    background: #1c1c21;
-  }
-
-  .sidebar {
-    border-right: 1px solid #2c2c33;
-  }
-
-  .inspector {
-    border-left: 1px solid #2c2c33;
-  }
-
-  .brand {
+  .chips {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.35rem;
+    flex-wrap: wrap;
   }
 
-  .brand h1 {
-    font-size: 1.05rem;
-    margin: 0;
-    letter-spacing: 0.02em;
+  /* The pack's own path, parked at the foot of the navigation where it belongs. */
+  .root {
+    margin: auto 0 0;
+    padding-top: 0.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    overflow-wrap: anywhere;
   }
 
-  .meta {
-    color: #9a958c;
-    font-size: 0.8rem;
-  }
-
-  .primary {
-    display: block;
-    width: 100%;
-    margin: 0.4rem 0;
-    background: #3b2a1a;
-    color: #ffc65c;
-    border: 1px solid #7a5220;
-    border-radius: 6px;
-    padding: 0.5rem;
-    font: inherit;
-    cursor: pointer;
-    min-height: 38px;
-  }
-
-  .projects {
-    font-size: 0.82rem;
-    margin-bottom: 0.4rem;
-  }
-
-  .projects ul {
-    list-style: none;
-    margin: 0.25rem 0 0;
-    padding: 0;
+  .screens nav {
     display: grid;
-    gap: 0.25rem;
+    gap: 0.1rem;
   }
 
-  .projects button {
-    width: 100%;
-    text-align: left;
-    background: #26262d;
-    color: inherit;
-    border: 1px solid #33333b;
-    border-radius: 6px;
-    padding: 0.4rem 0.5rem;
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .collisions {
-    background: #2a1f16;
-    border: 1px solid #7a5220;
-    border-radius: 6px;
-    padding: 0.35rem 0.5rem;
-    font-size: 0.78rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .collisions ul {
-    margin: 0.25rem 0 0;
-    padding-left: 1rem;
-    word-break: break-all;
-  }
-
-  nav details {
-    margin-bottom: 0.15rem;
-  }
-
-  nav summary {
-    cursor: pointer;
-    padding: 0.35rem 0.4rem;
-    border-radius: 6px;
+  .screens summary {
     text-transform: capitalize;
   }
 
-  nav summary:hover {
-    background: #26262d;
+  /* The sheets of an open folder, hung off a rail: one glance says which is which. */
+  .screens details > ul {
+    margin-left: 0.7rem;
+    padding-left: 0.3rem;
+    border-left: 1px solid var(--line);
   }
 
-  .count {
-    color: #77726a;
-    font-size: 0.75rem;
+  .card.alarm summary {
+    padding-left: 0;
+    padding-right: 0;
   }
 
-  nav ul {
-    list-style: none;
-    margin: 0;
-    padding-left: 0.6rem;
+  .collisions {
+    margin: 0.35rem 0 0;
+    padding-left: 1.1rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--warning) 55%, var(--ink));
+    overflow-wrap: anywhere;
   }
 
-  nav button {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
-    width: 100%;
-    padding: 0.45rem 0.5rem; /* generous — touch is a first-class pointer here */
-    background: none;
-    border: 0;
-    border-radius: 6px;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  nav button:hover {
-    background: #26262d;
-  }
-
-  nav button.active {
-    background: #3b2a1a;
-    color: #ffc65c;
-  }
-
-  .cp {
-    color: #77726a;
-    font-size: 0.72rem;
-  }
-
-  .stage-wrap {
-    overflow: auto;
-  }
-
-  h2 {
-    font-size: 1rem;
-    margin: 0.25rem 0 0.5rem;
-  }
-
-  h3 {
-    font-size: 0.85rem;
-    margin: 1rem 0 0.35rem;
-    color: #b8b2a7;
-  }
-
-  dl {
+  .title {
     display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.15rem 0.6rem;
-    font-size: 0.82rem;
-    margin: 0.4rem 0;
+    gap: 0.1rem;
+    min-width: 0;
   }
 
-  dt {
-    color: #9a958c;
+  .title h2 {
+    font-size: 0.95rem;
+    font-weight: 800;
+    overflow-wrap: anywhere;
   }
 
-  dd {
-    margin: 0;
-    word-break: break-all;
+  .truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .hint {
-    color: #77726a;
+  .note {
+    margin: 0.5rem 0 0;
+    display: grid;
+    gap: 0.3rem;
   }
 
-  .warn {
-    color: #ff9c5b;
+  .zoom {
+    margin-top: 0.4rem;
   }
 
-  .warn.big {
-    padding: 2rem;
+  .card > .btn {
+    margin-top: 0.15rem;
   }
 
-  .overlays {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .overlays label,
-  .controls label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0;
-    min-height: 28px;
-  }
-
-  .controls input[type="number"] {
-    width: 4.5rem;
-    background: #26262d;
-    color: inherit;
-    border: 1px solid #33333b;
-    border-radius: 4px;
-    padding: 0.25rem 0.4rem;
+  /* Below this the top bar has to choose: the actions win, the read-outs go. */
+  @media (max-width: 1180px) {
+    .chips {
+      display: none;
+    }
   }
 </style>
