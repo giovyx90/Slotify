@@ -15,7 +15,7 @@ import {
   type BevelSet,
   type RGBA,
 } from "./paint";
-import { advanceOf, blit, makeRaster, stripIsolated, type Raster } from "./raster";
+import { advanceOf, blit, makeRaster, scaleRaster, stripIsolated, type Raster } from "./raster";
 import type { Element, Project } from "./project";
 import { drawTileRegion, regionBBox, type TileCell } from "./tiles";
 import {
@@ -77,8 +77,10 @@ function drawLine(
   shadow: ShadowDir,
   x: number,
   y: number,
+  scale = 1,
 ): void {
-  blit(sheet, renderTextShadowed(font, text, { color: hexToRgb(colour) }, shadow), x, y);
+  const line = renderTextShadowed(font, text, { color: hexToRgb(colour) }, shadow);
+  blit(sheet, scaleRaster(line, scale), x, y);
 }
 
 function drawLabelCentred(
@@ -91,6 +93,7 @@ function drawLabelCentred(
   h: number,
   fallbackColour: string,
 ): void {
+  const scale = element.textScale ?? 1;
   const size = measureText(font, element.label ?? "");
   drawLine(
     sheet,
@@ -98,8 +101,9 @@ function drawLabelCentred(
     element.label ?? "",
     element.textColor ?? fallbackColour,
     element.shadow ?? "none",
-    x + Math.floor((w - size.w) / 2),
-    y + Math.floor((h - size.h) / 2),
+    x + Math.floor((w - size.w * scale) / 2),
+    y + Math.floor((h - size.h * scale) / 2),
+    scale,
   );
 }
 
@@ -140,10 +144,22 @@ function drawInfoboxLines(
 ): void {
   const font = fontFor(element, context);
   if (!font) return;
-  const lineHeight = font.cellH + (element.lineGap ?? 2);
+  // The NEXT infobox standard is 2× text; lines centre horizontally like the template.
+  const scale = element.textScale ?? 2;
+  const lineHeight = font.cellH * scale + (element.lineGap ?? 2);
   (element.lines ?? []).forEach((line, index) => {
     const colour = element.lineColors?.[index] ?? element.textColor ?? INFOBOX_TEXT_DEFAULT;
-    drawLine(sheet, font, line, colour, element.shadow ?? "none", x + 5, y + 5 + index * lineHeight);
+    const size = measureText(font, line);
+    drawLine(
+      sheet,
+      font,
+      line,
+      colour,
+      element.shadow ?? "none",
+      x + Math.max(5, Math.floor((element.w - size.w * scale) / 2)),
+      y + 6 + index * lineHeight,
+      scale,
+    );
   });
 }
 

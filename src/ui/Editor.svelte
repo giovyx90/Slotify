@@ -334,8 +334,29 @@
       return;
     }
 
-    if (tool === "button" || tool === "infobox") {
-      tapTile(point, tool);
+    if (tool === "button") {
+      tapTile(point, "button");
+      return;
+    }
+
+    if (tool === "infobox") {
+      // The project-standard infobox: full window width, the skin's native height,
+      // top snapped to the tapped lattice row — exactly the template, not a mini-box.
+      const row = Math.max(0, Math.floor((point.y - 17) / 18));
+      const element: Element = {
+        id: nextId(),
+        kind: "infobox",
+        x: 0,
+        y: Math.min(17 + 18 * row, 256 - (infoboxSkin?.raster.height ?? 91)),
+        w: infoboxSkin?.raster.width ?? 176,
+        h: infoboxSkin?.raster.height ?? 91,
+        lines: ["Info line"],
+        font: "minecraft",
+        textScale: 2,
+      };
+      project = { ...project, elements: [...project.elements, element] };
+      selectedId = element.id;
+      tool = "select";
       return;
     }
 
@@ -706,6 +727,12 @@
               <option value={2}>2px</option>
               <option value={3}>3px</option>
               <option value={4}>4px</option>
+            </select>
+          </label>
+          <label>size
+            <select value={selected.textScale ?? 2} onchange={(event) => { selected!.textScale = Number((event.target as HTMLSelectElement).value) as 1 | 2; touch(); }}>
+              <option value={1}>1×</option>
+              <option value={2}>2× (standard)</option>
             </select>
           </label>
         </div>

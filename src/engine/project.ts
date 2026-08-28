@@ -62,6 +62,8 @@ export const ElementSchema = z.object({
   cells: z.array(TileCellSchema).optional(),
   /** Vertical gap between infobox/text lines, pixels. */
   lineGap: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional(),
+  /** Integer pixel scale for label/text/lines. The NEXT infobox standard is 2×. */
+  textScale: z.union([z.literal(1), z.literal(2)]).optional(),
 });
 
 export const HotspotSchema = z.object({

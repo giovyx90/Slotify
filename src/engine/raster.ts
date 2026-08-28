@@ -160,6 +160,19 @@ export function detectCells(raster: Raster, ascent: number, rows = 6): { row: nu
   return found;
 }
 
+/** Integer nearest-neighbour upscale — pixel art only ever scales whole. */
+export function scaleRaster(source: Raster, factor: number): Raster {
+  if (factor <= 1) return source;
+  const out = makeRaster(source.width * factor, source.height * factor);
+  for (let y = 0; y < out.height; y++) {
+    for (let x = 0; x < out.width; x++) {
+      const si = (Math.floor(y / factor) * source.width + Math.floor(x / factor)) * 4;
+      out.data.set(source.data.subarray(si, si + 4), (y * out.width + x) * 4);
+    }
+  }
+  return out;
+}
+
 /** Alpha-over composite of `source` onto `target` at (dx, dy); out-of-bounds is dropped. */
 export function blit(target: Raster, source: Raster, dx: number, dy: number): void {
   for (let sy = 0; sy < source.height; sy++) {
