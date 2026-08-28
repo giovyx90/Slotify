@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { parseFont, type ParsedFont } from "../engine/fontJson";
+import { parseComponent, serializeComponent, type LibraryComponent } from "../engine/components";
+import { parseFont, type ParsedBitmap, type ParsedFont } from "../engine/fontJson";
 import { decodePng } from "../engine/png";
+import { loadBitmapFont, type BitmapFont } from "../engine/textFont";
 import {
   advanceOf,
   impliedAscent,
@@ -150,4 +152,82 @@ export function measureSheet(raster: Raster): Measurements {
 
 export function decodeTexture(bytes: Uint8Array): Raster {
   return decodePng(bytes);
+}
+
+/**
+ * The pack's own text font: the `ascii.png` override in default.json (the same texture
+ * the tooltips and gui_text_* fonts reuse), loaded once and shared by button labels,
+ * infoboxes and the tag generator.
+ */
+export async function loadGameFont(backend: FsBackend, pack: LoadedPack): Promise<BitmapFont | null> {
+  const defaultFont = pack.fonts.find((font) => font.name === "default.json");
+  if (!defaultFont) return null;
+
+  const provider = defaultFont.providers.find(
+    (candidate): candidate is ParsedBitmap =>
+      candidate.kind === "bitmap" && candidate.file.replace(/^minecraft:/, "").includes("font/ascii"),
+  );
+  if (!provider) return null;
+
+  const file = provider.file.replace(/^minecraft:/, "");
+  for (const textureRoot of pack.profile.paths.textureRoots) {
+    for (const category of ["_shared"]) {
+      try {
+        const bytes = await backend.read(
+          joinPath(pack.root, textureRoot, category, "assets/minecraft/textures", file),
+        );
+        return loadBitmapFont(provider, decodePng(bytes));
+      } catch {
+        // try the next location
+      }
+    }
+  }
+  return null;
+}
+
+const COMPONENTS_DIR = "tools/slotify/components";
+
+export async function listComponents(backend: FsBackend, root: string): Promise<LibraryComponent[]> {
+  try {
+    const entries = await backend.list(joinPath(root, COMPONENTS_DIR));
+    const components: LibraryComponent[] = [];
+    for (const entry of entries) {
+      if (entry.dir || !entry.name.endsWith(".json")) continue;
+      try {
+        components.push(parseComponent(await backend.readText(joinPath(root, COMPONENTS_DIR, entry.name))));
+      } catch (error) {
+        console.warn(`skipping unparseable component ${entry.name}:`, error);
+      }
+    }
+    return components.sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}
+
+export async function saveComponent(
+  backend: FsBackend,
+  root: string,
+  component: LibraryComponent,
+  spritePng?: Uint8Array,
+): Promise<void> {
+  await backend.write(
+    joinPath(root, COMPONENTS_DIR, `${component.id}.json`),
+    new TextEncoder().encode(serializeComponent(component)),
+  );
+  if (spritePng) {
+    await backend.write(joinPath(root, COMPONENTS_DIR, `${component.id}.png`), spritePng);
+  }
+}
+
+export async function loadSpriteRaster(
+  backend: FsBackend,
+  root: string,
+  componentId: string,
+): Promise<Raster | null> {
+  try {
+    return decodePng(await backend.read(joinPath(root, COMPONENTS_DIR, `${componentId}.png`)));
+  } catch {
+    return null;
+  }
 }

@@ -5,11 +5,14 @@
   import { detectCells, type Raster } from "../engine/raster";
   import { describeCollision, nextFree } from "../engine/registry";
   import { formatCodepoint } from "../engine/unicode";
+  import type { BitmapFont } from "../engine/textFont";
   import { detectBackend, joinPath } from "../platform/fs";
   import Editor from "./Editor.svelte";
   import Preview from "./Preview.svelte";
+  import TagTool from "./TagTool.svelte";
   import {
     decodeTexture,
+    loadGameFont,
     loadPack,
     measureSheet,
     resolveTexture,
@@ -37,10 +40,11 @@
   let baseSheet: DrawnSheet | null = $state(null);
   let overlaySheets: DrawnSheet[] = $state([]);
 
-  let mode: "viewer" | "editor" = $state("viewer");
+  let mode: "viewer" | "editor" | "tag" = $state("viewer");
   let project: Project | null = $state(null);
   let editorBackground: Raster | undefined = $state(undefined);
   let savedProjects: string[] = $state([]);
+  let gameFont: BitmapFont | null = $state(null);
 
   const folders = $derived.by(() => {
     if (!pack) return [] as { folder: string; screens: ScreenEntry[] }[];
@@ -68,6 +72,7 @@
         pack = await loadPack(backend, first[1], PROFILE_PATH);
         status = "";
         void refreshProjects();
+        gameFont = await loadGameFont(backend, pack);
       } catch (error) {
         status = `Failed to open pack: ${error}`;
       }
@@ -195,10 +200,18 @@
     {backend}
     packRoot={pack.root}
     fontPath={pack.profile.paths.fontDir + "/gui.json"}
+    font={gameFont}
     onExit={() => {
       mode = "viewer";
       void refreshProjects();
     }}
+  />
+{:else if mode === "tag" && pack && gameFont}
+  <TagTool
+    font={gameFont}
+    {backend}
+    packRoot={pack.root}
+    onExit={() => (mode = "viewer")}
   />
 {:else}
 <main>
@@ -212,6 +225,9 @@
       <p class="meta">{pack.fonts.length} fonts · {pack.registry.glyphs.size} glyphs · {pack.screens.length} sheets</p>
 
       <button class="primary" onclick={newScreen}>+ New screen</button>
+      {#if gameFont}
+        <button class="primary" onclick={() => (mode = "tag")}>Aa Tag generator</button>
+      {/if}
 
       {#if savedProjects.length > 0}
         <details class="projects" open>

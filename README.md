@@ -44,7 +44,31 @@ The roadmap, each stage useful on its own:
   test), builds deploy plans (texture + spliced font, shown before anything is
   written), and runs `nexo reload pack` over RCON — from the dev bridge today, from the
   Rust side once packaged.
-- **v3 — Text tools**: bitmap-font text rendering, infobox editor, pixel tag generator.
+- **v3 — Text, colours & components** ✅: the pack's own bitmap font (`ascii.png`)
+  rendered live — button labels, free text and infobox panels with editable fill, text
+  and border colours; a **pixel tag generator** (gradient fill, outline, shadow,
+  background plate → PNG or straight into the library); and an NXMenu-style **component
+  library**: save any group of elements as a reusable composite, or import a PNG as a
+  sprite, and place either with a tap — components live next to the pack
+  (`tools/slotify/components/`) so every future screen starts from the same parts.
+  Dragged elements edge-snap to each other; slots snap to the container grid.
+
+## Using it
+
+1. `npm run dev`, open `localhost:1420` (or the packaged app once built).
+2. The **viewer** lists every painted sheet in the pack with collisions flagged; pick
+   one to see measurements, or **Open in editor** to start from it.
+3. **+ New screen** starts blank: pick a tool (slot/button/panel/well/text/infobox),
+   tap the canvas to place, drag to move (edges snap), refine with the 1px nudge pad.
+   Colours, labels and infobox lines live in the right panel. Paint hotspots by tapping
+   slots with a group active.
+4. **Library**: check some layers, name them, *save ✓* — or *Import PNG…* — then tap
+   any library entry and tap the canvas to place it.
+5. **Aa Tag generator** renders styled game-font text; download it or save it to the
+   library as a sprite.
+6. **Export** writes the stray-stripped PNG and splices the provider into `gui.json`;
+   copy the visuals/config YAML and the Java scaffold from the same panel. **Push**
+   writes a deploy plan under a target pack path and runs `nexo reload pack` over RCON.
 
 ## Generic engine, per-project profiles
 

@@ -10,9 +10,11 @@ import { z } from "zod";
  * PNG changes; the design doesn't.
  */
 
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
 export const ElementSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["slot", "button", "panel", "well"]),
+  kind: z.enum(["slot", "button", "panel", "well", "text", "infobox", "sprite"]),
   /** Window coordinates, pixels. For `slot`, the 16×16 well interior's top-left. */
   x: z.number().int(),
   y: z.number().int(),
@@ -20,6 +22,17 @@ export const ElementSchema = z.object({
   h: z.number().int().positive(),
   /** Buttons only: drawn pressed-in instead of raised. */
   pressed: z.boolean().optional(),
+  /** Fill tint for button/panel/well, background for infobox. */
+  color: z.string().regex(HEX).optional(),
+  /** Button/text label. One line, game font. */
+  label: z.string().optional(),
+  textColor: z.string().regex(HEX).optional(),
+  /** Infobox body, one string per line. */
+  lines: z.array(z.string()).optional(),
+  /** Infobox border. */
+  borderColor: z.string().regex(HEX).optional(),
+  /** Sprite elements: id of the library component whose PNG this draws. */
+  sprite: z.string().optional(),
 });
 
 export const HotspotSchema = z.object({

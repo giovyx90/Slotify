@@ -1,18 +1,27 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
   import { renderScreen } from "../engine/chestRenderer";
+  import {
+    componentFromElements,
+    instantiate,
+    slugify,
+    type LibraryComponent,
+  } from "../engine/components";
   import { buildDeployPlan } from "../engine/deploy";
-  import { CELL, COLS, GRID_X, GRID_Y, TITLE_X, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
+  import { CELL, COLS, GRID_X, GRID_Y, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
   import { scaffoldFiles, advanceTable, type ScaffoldInput } from "../engine/javaScaffold";
   import { encodePng } from "../engine/png";
   import { serializeProject, type Element, type Project } from "../engine/project";
   import type { Raster } from "../engine/raster";
   import { bakeSheet } from "../engine/renderProject";
+  import { snapToEdges } from "../engine/snap";
   import { spliceProviders } from "../engine/spliceGuiJson";
+  import { measureText, type BitmapFont } from "../engine/textFont";
   import { parseCodepoint } from "../engine/unicode";
   import { visualsYmlBlock, configYmlBlock } from "../engine/visualsYml";
   import { joinPath, type FsBackend } from "../platform/fs";
   import { rconExec } from "../platform/rcon";
+  import { decodeTexture, listComponents, loadSpriteRaster, saveComponent } from "./model";
 
   const PAD = 32;
   const ROLE_COLOURS: Record<string, string> = {
@@ -26,6 +35,7 @@
     backend,
     packRoot,
     fontPath,
+    font,
     onExit,
   }: {
     project: Project;
@@ -33,20 +43,29 @@
     backend: FsBackend;
     packRoot: string;
     fontPath: string;
+    font: BitmapFont | null;
     onExit: () => void;
   } = $props();
 
-  type Tool = "select" | "slot" | "button" | "panel" | "well" | "hotspot";
+  type Tool = "select" | "slot" | "button" | "panel" | "well" | "text" | "infobox" | "hotspot";
   let tool: Tool = $state("select");
   let selectedId: string | null = $state(null);
+  let checked = $state(new Set<string>());
   let activeHotspot: string | null = $state(project.hotspots[0]?.id ?? null);
   let zoom = $state(2);
   let guides = $state(true);
   let statusLine = $state("");
 
   let canvas: HTMLCanvasElement | undefined = $state();
-  let nextId = $state(1);
+  let nextIdCounter = $state(1);
   let drag: { id: string; startX: number; startY: number; elX: number; elY: number } | null = null;
+
+  // NXMenu-style library
+  let library: LibraryComponent[] = $state([]);
+  let pendingComponent: LibraryComponent | null = $state(null);
+  let spriteRasters = $state(new Map<string, Raster>());
+  let componentName = $state("");
+  let fileInput: HTMLInputElement | undefined = $state();
 
   // v2 deploy panel
   let deployPath = $state("");
@@ -54,8 +73,41 @@
   let rconPort = $state(25575);
   let rconPassword = $state("");
 
-  const baked = $derived(bakeSheet(project, background));
+  const baked = $derived(
+    bakeSheet(project, background, { font: font ?? undefined, sprites: spriteRasters }),
+  );
   const selected = $derived(project.elements.find((element) => element.id === selectedId) ?? null);
+
+  function nextId(): string {
+    return `e${nextIdCounter++}`;
+  }
+
+  async function refreshLibrary(): Promise<void> {
+    library = await listComponents(backend, packRoot);
+  }
+
+  async function ensureSprites(elements: readonly Element[]): Promise<void> {
+    const wanted = elements
+      .filter((element) => element.kind === "sprite" && element.sprite && !spriteRasters.has(element.sprite))
+      .map((element) => element.sprite!);
+    if (wanted.length === 0) return;
+    const next = new Map(spriteRasters);
+    for (const id of new Set(wanted)) {
+      const raster = await loadSpriteRaster(backend, packRoot, id);
+      if (raster) next.set(id, raster);
+    }
+    spriteRasters = next;
+  }
+
+  $effect(() => {
+    void refreshLibrary();
+    void ensureSprites(project.elements);
+    // Seed the id counter above anything already in the project.
+    const used = project.elements
+      .map((element) => Number(/^e(\d+)$/.exec(element.id)?.[1] ?? 0))
+      .reduce((a, b) => Math.max(a, b), 0);
+    if (used >= nextIdCounter) nextIdCounter = used + 1;
+  });
 
   $effect(() => {
     if (!canvas) return;
@@ -108,7 +160,6 @@
       stroke(0, 0, 176, windowHeight(project.rows), "rgba(255,255,255,0.3)");
     }
 
-    // Hotspot tints, role-coloured like the farm legend.
     for (const hotspot of project.hotspots) {
       const colour = ROLE_COLOURS[hotspot.role] ?? "#AAAAAA";
       for (const slot of hotspot.slots) {
@@ -116,6 +167,11 @@
         fill(rect.x, rect.y, rect.w, rect.h, colour + (hotspot.id === activeHotspot ? "66" : "38"));
         stroke(rect.x, rect.y, rect.w, rect.h, colour);
       }
+    }
+
+    for (const id of checked) {
+      const element = project.elements.find((candidate) => candidate.id === id);
+      if (element) stroke(element.x - 1, element.y - 1, element.w + 2, element.h + 2, "#5FB4B4");
     }
 
     if (selected) {
@@ -131,7 +187,7 @@
     };
   }
 
-  function snapToSlot(x: number, y: number): { x: number; y: number } {
+  function snapSlot(x: number, y: number): { x: number; y: number } {
     const col = Math.min(COLS - 1, Math.max(0, Math.round((x - GRID_X) / CELL)));
     const row = Math.min(project.rows - 1, Math.max(0, Math.round((y - GRID_Y) / CELL)));
     return { x: GRID_X + col * CELL, y: GRID_Y + row * CELL };
@@ -150,6 +206,21 @@
   function onPointerDown(event: PointerEvent): void {
     const point = windowPoint(event);
 
+    if (pendingComponent) {
+      const placed = instantiate(
+        pendingComponent,
+        point.x - (pendingComponent.w >> 1),
+        point.y - (pendingComponent.h >> 1),
+        nextId,
+      );
+      project = { ...project, elements: [...project.elements, ...placed] };
+      void ensureSprites(placed);
+      selectedId = placed[0]?.id ?? null;
+      statusLine = `placed ${pendingComponent.name}`;
+      pendingComponent = null;
+      return;
+    }
+
     if (tool === "hotspot") {
       const col = Math.floor((point.x - GRID_X) / CELL);
       const row = Math.floor((point.y - GRID_Y) / CELL);
@@ -165,13 +236,22 @@
     }
 
     if (tool !== "select") {
-      const sizes: Record<string, [number, number]> = {
-        slot: [16, 16], button: [40, 18], panel: [80, 40], well: [18, 18],
+      const defaults: Record<string, Partial<Element> & { w: number; h: number }> = {
+        slot: { w: 16, h: 16 },
+        button: { w: 40, h: 18, label: "" },
+        panel: { w: 80, h: 40 },
+        well: { w: 18, h: 18 },
+        text: { w: 40, h: 8, label: "Text", textColor: "#FFFFFF" },
+        infobox: { w: 100, h: 34, lines: ["Info line"], borderColor: "#F0A831" },
       };
-      const [w, h] = sizes[tool]!;
-      const at = tool === "slot" ? snapToSlot(point.x, point.y) : { x: point.x - (w >> 1), y: point.y - (h >> 1) };
-      const element: Element = { id: `e${nextId}`, kind: tool, x: at.x, y: at.y, w, h };
-      nextId += 1;
+      const base = defaults[tool]!;
+      const at = tool === "slot" ? snapSlot(point.x, point.y) : { x: point.x - (base.w >> 1), y: point.y - (base.h >> 1) };
+      const element: Element = { id: nextId(), kind: tool as Element["kind"], x: at.x, y: at.y, ...base } as Element;
+      if (element.kind === "text" && font && element.label) {
+        const size = measureText(font, element.label);
+        element.w = Math.max(1, size.w);
+        element.h = size.h;
+      }
       project = { ...project, elements: [...project.elements, element] };
       selectedId = element.id;
       tool = "select";
@@ -193,7 +273,17 @@
     if (!element) return;
     let x = drag.elX + point.x - drag.startX;
     let y = drag.elY + point.y - drag.startY;
-    if (element.kind === "slot") ({ x, y } = snapToSlot(x + 8, y + 8));
+
+    if (element.kind === "slot") {
+      ({ x, y } = snapSlot(x + 8, y + 8));
+    } else {
+      // Edge snapping against every other element — how pieces connect.
+      const others = project.elements
+        .filter((candidate) => candidate.id !== element.id)
+        .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
+      ({ x, y } = snapToEdges({ x, y, w: element.w, h: element.h }, others));
+    }
+
     element.x = x;
     element.y = y;
     project = { ...project };
@@ -214,6 +304,63 @@
     if (!selectedId) return;
     project = { ...project, elements: project.elements.filter((element) => element.id !== selectedId) };
     selectedId = null;
+  }
+
+  function touch(): void {
+    project = { ...project };
+  }
+
+  function retextMeasure(): void {
+    if (selected?.kind === "text" && font && selected.label) {
+      const size = measureText(font, selected.label);
+      selected.w = Math.max(1, size.w);
+      selected.h = size.h;
+    }
+    touch();
+  }
+
+  function toggleChecked(id: string): void {
+    const next = new Set(checked);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    checked = next;
+  }
+
+  async function saveSelectionAsComponent(): Promise<void> {
+    const ids = checked.size > 0 ? checked : selectedId ? new Set([selectedId]) : new Set<string>();
+    const elements = project.elements.filter((element) => ids.has(element.id));
+    if (elements.length === 0 || !componentName.trim()) {
+      statusLine = "check some layers and give the component a name first";
+      return;
+    }
+    const component = componentFromElements(slugify(componentName), componentName.trim(), elements);
+    await saveComponent(backend, packRoot, component);
+    componentName = "";
+    checked = new Set();
+    await refreshLibrary();
+    statusLine = `component "${component.name}" saved to the library`;
+  }
+
+  async function importSpritePng(event: Event): Promise<void> {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const raster = decodeTexture(bytes);
+    const name = file.name.replace(/\.png$/i, "");
+    const component: LibraryComponent = {
+      version: 1,
+      id: slugify(name),
+      name,
+      kind: "sprite",
+      w: raster.width,
+      h: raster.height,
+    };
+    await saveComponent(backend, packRoot, component, bytes);
+    spriteRasters = new Map(spriteRasters).set(component.id, raster);
+    await refreshLibrary();
+    statusLine = `sprite "${name}" imported — tap the canvas to place it`;
+    pendingComponent = component;
+    (event.target as HTMLInputElement).value = "";
   }
 
   function addHotspot(): void {
@@ -313,17 +460,38 @@
 
     <h3>Place</h3>
     <div class="palette">
-      {#each ["select", "slot", "button", "panel", "well", "hotspot"] as candidate}
-        <button class:active={tool === candidate} onclick={() => (tool = candidate as Tool)}>{candidate}</button>
+      {#each ["select", "slot", "button", "panel", "well", "text", "infobox", "hotspot"] as candidate}
+        <button class:active={tool === candidate && !pendingComponent} onclick={() => { tool = candidate as Tool; pendingComponent = null; }}>{candidate}</button>
       {/each}
     </div>
 
-    <h3>Layers</h3>
+    <h3>Library</h3>
+    <ul class="layers">
+      {#each library as component}
+        <li>
+          <button class:active={pendingComponent?.id === component.id} onclick={() => { pendingComponent = component; statusLine = `tap the canvas to place ${component.name}`; }}>
+            {component.kind === "sprite" ? "🖼" : "🧩"} {component.name} <span class="hint">{component.w}×{component.h}</span>
+          </button>
+        </li>
+      {/each}
+      {#if library.length === 0}
+        <li class="hint">No components yet — check layers below and save, or import a PNG.</li>
+      {/if}
+    </ul>
+    <div class="row2">
+      <input placeholder="component name" bind:value={componentName} />
+      <button onclick={saveSelectionAsComponent}>save ✓</button>
+    </div>
+    <button onclick={() => fileInput?.click()}>Import PNG…</button>
+    <input class="hidden" type="file" accept="image/png" bind:this={fileInput} onchange={importSpritePng} />
+
+    <h3>Layers <span class="hint">✓ = in the next component</span></h3>
     <ul class="layers">
       {#each project.elements as element}
-        <li>
+        <li class="layer-row">
+          <input type="checkbox" checked={checked.has(element.id)} onchange={() => toggleChecked(element.id)} />
           <button class:active={selectedId === element.id} onclick={() => (selectedId = element.id)}>
-            {element.kind} @ {element.x},{element.y}
+            {element.kind}{element.label ? ` “${element.label}”` : ""} @ {element.x},{element.y}
           </button>
         </li>
       {/each}
@@ -331,28 +499,6 @@
         <li class="hint">Pick a component above, then tap the canvas.</li>
       {/if}
     </ul>
-
-    {#if selected}
-      <h3>Selected</h3>
-      <div class="grid2">
-        <label>x <input type="number" bind:value={selected.x} onchange={() => (project = { ...project })} /></label>
-        <label>y <input type="number" bind:value={selected.y} onchange={() => (project = { ...project })} /></label>
-        <label>w <input type="number" min="2" bind:value={selected.w} onchange={() => (project = { ...project })} /></label>
-        <label>h <input type="number" min="2" bind:value={selected.h} onchange={() => (project = { ...project })} /></label>
-      </div>
-      {#if selected.kind === "button"}
-        <label class="row"><input type="checkbox" bind:checked={selected.pressed} onchange={() => (project = { ...project })} /> pressed</label>
-      {/if}
-      <div class="nudge">
-        <button onclick={() => nudge(0, -1)} aria-label="up">▲</button>
-        <div>
-          <button onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
-          <button onclick={() => nudge(1, 0)} aria-label="right">▶</button>
-        </div>
-        <button onclick={() => nudge(0, 1)} aria-label="down">▼</button>
-        <button class="danger" onclick={removeSelected}>delete</button>
-      </div>
-    {/if}
 
     <h3>Hotspots</h3>
     <ul class="layers">
@@ -362,7 +508,7 @@
             <span class="swatch" style:background={ROLE_COLOURS[hotspot.role] ?? "#aaa"}></span>
             {hotspot.id} · {hotspot.slots.length}
           </button>
-          <select bind:value={hotspot.role} onchange={() => (project = { ...project })}>
+          <select bind:value={hotspot.role} onchange={touch}>
             {#each Object.keys(ROLE_COLOURS) as role}<option>{role}</option>{/each}
           </select>
         </li>
@@ -381,6 +527,54 @@
   </section>
 
   <aside class="panel">
+    {#if selected}
+      <h3>Selected: {selected.kind}</h3>
+      <div class="grid2">
+        <label>x <input type="number" bind:value={selected.x} onchange={touch} /></label>
+        <label>y <input type="number" bind:value={selected.y} onchange={touch} /></label>
+        <label>w <input type="number" min="2" bind:value={selected.w} onchange={touch} /></label>
+        <label>h <input type="number" min="2" bind:value={selected.h} onchange={touch} /></label>
+      </div>
+
+      {#if selected.kind === "button" || selected.kind === "text"}
+        <label class="row">label <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextMeasure(); }} /></label>
+      {/if}
+      {#if selected.kind === "infobox"}
+        <label class="row">lines
+          <textarea
+            rows="3"
+            value={(selected.lines ?? []).join("\n")}
+            oninput={(event) => { selected!.lines = (event.target as HTMLTextAreaElement).value.split("\n"); touch(); }}
+          ></textarea>
+        </label>
+      {/if}
+
+      <div class="grid2 colors">
+        {#if selected.kind !== "text" && selected.kind !== "sprite" && selected.kind !== "slot"}
+          <label>fill <input type="color" value={selected.color ?? "#C6C6C6"} oninput={(event) => { selected!.color = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+        {/if}
+        {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "infobox"}
+          <label>text <input type="color" value={selected.textColor ?? "#FFFFFF"} oninput={(event) => { selected!.textColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+        {/if}
+        {#if selected.kind === "infobox"}
+          <label>border <input type="color" value={selected.borderColor ?? "#F0A831"} oninput={(event) => { selected!.borderColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+        {/if}
+      </div>
+
+      {#if selected.kind === "button"}
+        <label class="row"><input type="checkbox" bind:checked={selected.pressed} onchange={touch} /> pressed</label>
+      {/if}
+      <div class="nudge">
+        <button onclick={() => nudge(0, -1)} aria-label="up">▲</button>
+        <div>
+          <button onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
+          <button onclick={() => nudge(1, 0)} aria-label="right">▶</button>
+        </div>
+        <button onclick={() => nudge(0, 1)} aria-label="down">▼</button>
+        <button class="danger" onclick={removeSelected}>delete</button>
+      </div>
+    {/if}
+
     <h3>Screen</h3>
     <div class="grid2">
       <label>rows <input type="number" min="1" max="6" bind:value={project.rows} /></label>
@@ -395,6 +589,7 @@
     <h3>Measured</h3>
     <p class="measure">
       advance <b>{baked.advance}</b> · strays stripped <b class={baked.straysRemoved ? "warn" : ""}>{baked.straysRemoved}</b>
+      {#if !font}<br /><span class="warn">game font not loaded — labels won't render</span>{/if}
     </p>
 
     <h3>Export</h3>
@@ -429,7 +624,7 @@
 <style>
   .editor {
     display: grid;
-    grid-template-columns: 250px 1fr 300px;
+    grid-template-columns: 260px 1fr 300px;
     height: 100vh;
   }
 
@@ -462,9 +657,10 @@
 
   h2 { font-size: 0.95rem; margin: 0.5rem 0; word-break: break-all; }
   h3 { font-size: 0.8rem; margin: 0.9rem 0 0.3rem; color: #b8b2a7; text-transform: uppercase; letter-spacing: 0.04em; }
+  h3 .hint { text-transform: none; letter-spacing: 0; }
 
   .palette { display: flex; flex-wrap: wrap; gap: 0.3rem; }
-  .palette button, .actions button, .back, .nudge button, .layers button, button {
+  button {
     background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 6px;
     padding: 0.45rem 0.6rem; font: inherit; cursor: pointer; min-height: 34px;
   }
@@ -473,16 +669,27 @@
 
   .layers { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
   .layers button { width: 100%; text-align: left; }
+  .layer-row { display: flex; align-items: center; gap: 0.3rem; }
+  .layer-row input[type="checkbox"] { width: auto; }
+  .layer-row button { flex: 1; }
   .hotspot-row { display: flex; gap: 0.3rem; }
   .hotspot-row button { flex: 1; display: flex; align-items: center; gap: 0.4rem; }
   .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-  .hint { color: #77726a; font-size: 0.8rem; }
+  .hint { color: #77726a; font-size: 0.78rem; }
+  .hidden { display: none; }
+  .row2 { display: flex; gap: 0.3rem; margin: 0.3rem 0; }
+  .row2 input { flex: 1; }
 
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; }
+  .colors { margin-top: 0.4rem; }
   label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
   label.row { margin: 0.3rem 0; }
-  input { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; padding: 0.3rem 0.4rem; width: 100%; min-width: 0; }
+  input, textarea {
+    background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px;
+    padding: 0.3rem 0.4rem; width: 100%; min-width: 0; font: inherit;
+  }
   input[type="checkbox"] { width: auto; }
+  input[type="color"] { padding: 0.1rem; height: 30px; }
   select { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; }
 
   .nudge { display: grid; justify-items: center; gap: 0.25rem; margin-top: 0.4rem; }
