@@ -69,7 +69,7 @@
     onExit: () => void;
   } = $props();
 
-  type Tool = "select" | "button" | "infobox" | "slot" | "erase" | "text" | "panel" | "well" | "hotspot";
+  type Tool = "select" | "button" | "infobox" | "slot" | "erase" | "cover" | "text" | "panel" | "well" | "hotspot";
   let tool: Tool = $state("select");
   let selectedId: string | null = $state(null);
   let checked = $state(new Set<string>());
@@ -217,6 +217,21 @@
       }
     }
 
+    if (tool === "cover") {
+      const tint = (x: number, y: number) => {
+        fill(x, y, 16, 16, "rgba(11,13,16,0.25)");
+        stroke(x, y, 16, 16, "rgba(11,13,16,0.6)");
+      };
+      for (const slot of project.hiddenSlots ?? []) {
+        const rect = slotWindowRect(Math.floor(slot / COLS), slot % COLS);
+        tint(rect.x, rect.y);
+      }
+      for (const slot of project.hiddenInvSlots ?? []) {
+        const y = slot >= 27 ? hotbarY(project.rows) : playerInvY(project.rows) + Math.floor(slot / COLS) * CELL;
+        tint(GRID_X + (slot % COLS) * CELL, y);
+      }
+    }
+
     for (const id of checked) {
       const element = project.elements.find((candidate) => candidate.id === id);
       if (element) stroke(element.x - 1, element.y - 1, element.w + 2, element.h + 2, OVERLAY.staged);
@@ -338,6 +353,34 @@
     project = { ...project, holes: [...holes].sort() };
   }
 
+  /**
+   * The gentler sibling of erase: the slot's well disappears but the panel grey stays —
+   * as if no slot were ever drawn there. Container and viewer inventory alike.
+   */
+  function tapCover(point: { x: number; y: number }): void {
+    const col = Math.floor((point.x - GRID_X) / CELL);
+    if (col < 0 || col >= COLS) return;
+
+    const containerRow = Math.floor((point.y - GRID_Y) / CELL);
+    if (containerRow >= 0 && containerRow < project.rows) {
+      const index = slotIndex(containerRow, col);
+      const hidden = new Set(project.hiddenSlots ?? []);
+      if (hidden.has(index)) hidden.delete(index);
+      else hidden.add(index);
+      project = { ...project, hiddenSlots: [...hidden].sort((a, b) => a - b) };
+      return;
+    }
+
+    const invRow = Math.floor((point.y - playerInvY(project.rows)) / CELL);
+    const isHotbar = Math.floor((point.y - hotbarY(project.rows)) / CELL) === 0;
+    const invIndex = isHotbar ? 27 + col : invRow >= 0 && invRow < 3 ? invRow * COLS + col : null;
+    if (invIndex === null) return;
+    const hidden = new Set(project.hiddenInvSlots ?? []);
+    if (hidden.has(invIndex)) hidden.delete(invIndex);
+    else hidden.add(invIndex);
+    project = { ...project, hiddenInvSlots: [...hidden].sort((a, b) => a - b) };
+  }
+
   function onPointerDown(event: PointerEvent): void {
     const point = windowPoint(event);
 
@@ -384,6 +427,11 @@
 
     if (tool === "erase") {
       tapErase(point);
+      return;
+    }
+
+    if (tool === "cover") {
+      tapCover(point);
       return;
     }
 
@@ -668,7 +716,7 @@
           <span class="label-mono">Tools</span>
         </div>
         <div class="palette">
-          {#each ["select", "button", "infobox", "slot", "erase", "text", "panel", "well", "hotspot"] as candidate}
+          {#each ["select", "button", "infobox", "slot", "erase", "cover", "text", "panel", "well", "hotspot"] as candidate}
             <button
               class="tool"
               class:active={tool === candidate && !pendingComponent}
@@ -906,8 +954,10 @@
         <label class="check"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
         <p class="hint">
           Erase tool: tap any part of the window — a slot, the top band, a margin — and it
-          becomes a transparent hole; the contour redraws around it. Tap again to restore.
-          Holes: <b>{project.holes?.length ?? 0}</b>.
+          becomes a transparent hole; the contour redraws around it. Cover tool: the slot's
+          well goes away but the panel grey stays, as if no slot were drawn. Tap again to
+          restore. Holes: <b>{project.holes?.length ?? 0}</b> · covered:
+          <b>{(project.hiddenSlots?.length ?? 0) + (project.hiddenInvSlots?.length ?? 0)}</b>.
         </p>
       </section>
 
