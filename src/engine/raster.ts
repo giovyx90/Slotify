@@ -131,6 +131,35 @@ export function impliedAscent(raster: Raster, firstCellRow: number): number | nu
   return null;
 }
 
+/**
+ * Every container cell actually drawn on a sheet with a known ascent, as (row, col)
+ * pairs — the bevel/interior/highlight test of `impliedAscent`, aimed at each slot
+ * position instead of scanning. Feeds the importer's hotspot suggestions.
+ */
+export function detectCells(raster: Raster, ascent: number, rows = 6): { row: number; col: number }[] {
+  const solid = (y: number, x0: number, colour: [number, number, number]): boolean => {
+    if (y < 0 || y >= raster.height || x0 + 16 > raster.width) return false;
+    for (let x = x0; x < x0 + 16; x++) {
+      if (alphaAt(raster, x, y) === 0) return false;
+      const [r, g, b] = rgbAt(raster, x, y);
+      if (r !== colour[0] || g !== colour[1] || b !== colour[2]) return false;
+    }
+    return true;
+  };
+
+  const found: { row: number; col: number }[] = [];
+  for (let row = 0; row < rows; row++) {
+    const y = ascent + 5 + 18 * row;
+    for (let col = 0; col < 9; col++) {
+      const x0 = 8 + 18 * col;
+      if (solid(y - 1, x0, [55, 55, 55]) && solid(y + 16, x0, [255, 255, 255])) {
+        found.push({ row, col });
+      }
+    }
+  }
+  return found;
+}
+
 /** Alpha-over composite of `source` onto `target` at (dx, dy); out-of-bounds is dropped. */
 export function blit(target: Raster, source: Raster, dx: number, dy: number): void {
   for (let sy = 0; sy < source.height; sy++) {

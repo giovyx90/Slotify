@@ -25,16 +25,25 @@ checked and visible** instead of guessed.
 
 ## Status
 
-Early. The roadmap, each stage useful on its own:
+The roadmap, each stage useful on its own:
 
-- **v0 — Registry + Viewer** *(in progress)*: open a pack checkout, parse every font
-  file, build the codepoint registry (collisions, dangling references, next-free
-  allocation), browse every painted sheet with a pixel-perfect chest-window preview and
-  live measurements (advance, stray pixels, implied vs declared ascent).
-- **v1 — Editor + Export**: component library, drag-drop canvas, overlay layers,
-  hotspot painting; export PNGs, font-json provider splices, config blocks.
-- **v2 — Deploy + scaffold**: push to a dev server (file copy + RCON reload) and
-  generate server-side glue code.
+- **v0 — Registry + Viewer** ✅: open a pack checkout, parse every font file, build the
+  codepoint registry (collisions, dangling references, next-free allocation), browse
+  every painted sheet with a pixel-perfect chest-window preview and live measurements
+  (advance, stray pixels, implied vs declared ascent). Found three undocumented
+  collisions in its first production pack on first run.
+- **v1 — Editor + Export** ✅: touch-first canvas editor (place/drag/nudge slots,
+  buttons, panels, wells in window coordinates — the ascent bakes at export, so it can
+  never be "designed wrong"), hotspot painting on the slot grid, projects saved and
+  reopened as JSON, import of existing screens with cell-detected hotspot suggestions;
+  exports the PNG (stray-stripped, advance measured), an **idempotent textual splice**
+  into `gui.json` (never re-serialised; verified byte-identical against a production
+  file), and visuals/config YAML snippets.
+- **v2 — Deploy + scaffold** ✅ *(mechanism)*: generates the server-side triplet
+  (`<Name>Glyphs` with measured advances, `<Name>Layout` slot constants, a cursor-sim
+  test), builds deploy plans (texture + spliced font, shown before anything is
+  written), and runs `nexo reload pack` over RCON — from the dev bridge today, from the
+  Rust side once packaged.
 - **v3 — Text tools**: bitmap-font text rendering, infobox editor, pixel tag generator.
 
 ## Generic engine, per-project profiles

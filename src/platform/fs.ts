@@ -21,6 +21,7 @@ export interface FsBackend {
   list(path: string): Promise<DirEntry[]>;
   read(path: string): Promise<Uint8Array>;
   readText(path: string): Promise<string>;
+  write(path: string, bytes: Uint8Array): Promise<void>;
 }
 
 export function joinPath(...parts: string[]): string {
@@ -47,6 +48,14 @@ class DevHttpBackend implements FsBackend {
 
   async readText(path: string): Promise<string> {
     return new TextDecoder().decode(await this.read(path));
+  }
+
+  async write(path: string, bytes: Uint8Array): Promise<void> {
+    const response = await fetch(`/__slotify/write?path=${encodeURIComponent(path)}`, {
+      method: "POST",
+      body: bytes as BodyInit,
+    });
+    if (!response.ok) throw new Error(`write ${path}: ${response.status} ${await response.text()}`);
   }
 
   private async json<T>(url: string): Promise<T> {
@@ -77,6 +86,11 @@ class TauriBackend implements FsBackend {
   async readText(path: string): Promise<string> {
     const fs = await import("@tauri-apps/plugin-fs");
     return fs.readTextFile(path);
+  }
+
+  async write(path: string, bytes: Uint8Array): Promise<void> {
+    const fs = await import("@tauri-apps/plugin-fs");
+    await fs.writeFile(path, bytes);
   }
 }
 

@@ -6,7 +6,6 @@ import {
   GRID_Y,
   SHEET_TO_WINDOW_Y,
   TITLE_X,
-  WELL,
   WINDOW_W,
   hotbarY,
   playerInvY,
@@ -25,35 +24,15 @@ import { originsOf, spacerString, type SpacerSet, NEXT_SPACERS } from "./spacers
  * `impliedAscent` detects on artist sheets.
  */
 
-const PANEL: RGBA = [198, 198, 198, 255];
-const PANEL_LIGHT: RGBA = [255, 255, 255, 255];
-const PANEL_DARK: RGBA = [85, 85, 85, 255];
-const PANEL_EDGE: RGBA = [55, 55, 55, 255];
-const WELL_FILL: RGBA = [139, 139, 139, 255];
-const WELL_SHADOW: RGBA = [55, 55, 55, 255];
-const WELL_LIGHT: RGBA = [255, 255, 255, 255];
-
-type RGBA = [number, number, number, number];
-
-function put(raster: Raster, x: number, y: number, colour: RGBA): void {
-  if (x < 0 || x >= raster.width || y < 0 || y >= raster.height) return;
-  raster.data.set(colour, (y * raster.width + x) * 4);
-}
-
-function rect(raster: Raster, x: number, y: number, w: number, h: number, colour: RGBA): void {
-  for (let dy = 0; dy < h; dy++) for (let dx = 0; dx < w; dx++) put(raster, x + dx, y + dy, colour);
-}
-
-/** One slot with its 16×16 well at (wellX, wellY): shadow above/left, light below/right. */
-function drawSlot(raster: Raster, wellX: number, wellY: number): void {
-  rect(raster, wellX, wellY, WELL, WELL, WELL_FILL);
-  for (let i = -1; i < WELL; i++) {
-    put(raster, wellX + i, wellY - 1, WELL_SHADOW);
-    put(raster, wellX - 1, wellY + i, WELL_SHADOW);
-    put(raster, wellX + i + 1, wellY + WELL, WELL_LIGHT);
-    put(raster, wellX + WELL, wellY + i, WELL_LIGHT);
-  }
-}
+import {
+  PANEL,
+  PANEL_DARK,
+  PANEL_EDGE,
+  PANEL_LIGHT,
+  drawSlotWell,
+  put,
+  rect,
+} from "./paint";
 
 export interface RenderOptions {
   rows: number;
@@ -85,18 +64,18 @@ export function renderWindow(options: RenderOptions): Raster {
   }
 
   for (let index = 0; index < COLS * options.rows; index++) {
-    drawSlot(raster, GRID_X + (index % COLS) * CELL, GRID_Y + Math.floor(index / COLS) * CELL);
+    drawSlotWell(raster,GRID_X + (index % COLS) * CELL, GRID_Y + Math.floor(index / COLS) * CELL);
   }
 
   if (!options.hideViewerInventory) {
     const invY = playerInvY(options.rows);
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < COLS; col++) {
-        drawSlot(raster, GRID_X + col * CELL, invY + row * CELL);
+        drawSlotWell(raster,GRID_X + col * CELL, invY + row * CELL);
       }
     }
     const hbY = hotbarY(options.rows);
-    for (let col = 0; col < COLS; col++) drawSlot(raster, GRID_X + col * CELL, hbY);
+    for (let col = 0; col < COLS; col++) drawSlotWell(raster, GRID_X + col * CELL, hbY);
   }
 
   return raster;

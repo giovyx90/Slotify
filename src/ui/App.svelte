@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
   import type { DrawnSheet } from "../engine/chestRenderer";
-  import type { Raster } from "../engine/raster";
-  import { describeCollision } from "../engine/registry";
+  import { newProject, parseProject, type Project } from "../engine/project";
+  import { detectCells, type Raster } from "../engine/raster";
+  import { describeCollision, nextFree } from "../engine/registry";
   import { formatCodepoint } from "../engine/unicode";
-  import { detectBackend } from "../platform/fs";
+  import { detectBackend, joinPath } from "../platform/fs";
+  import Editor from "./Editor.svelte";
   import Preview from "./Preview.svelte";
   import {
     decodeTexture,
@@ -35,6 +37,11 @@
   let baseSheet: DrawnSheet | null = $state(null);
   let overlaySheets: DrawnSheet[] = $state([]);
 
+  let mode: "viewer" | "editor" = $state("viewer");
+  let project: Project | null = $state(null);
+  let editorBackground: Raster | undefined = $state(undefined);
+  let savedProjects: string[] = $state([]);
+
   const folders = $derived.by(() => {
     if (!pack) return [] as { folder: string; screens: ScreenEntry[] }[];
     const grouped = new Map<string, ScreenEntry[]>();
@@ -60,6 +67,7 @@
         status = `Reading fonts from ${first[0]}…`;
         pack = await loadPack(backend, first[1], PROFILE_PATH);
         status = "";
+        void refreshProjects();
       } catch (error) {
         status = `Failed to open pack: ${error}`;
       }
@@ -114,6 +122,60 @@
     overlaySheets = sheets;
   }
 
+  async function refreshProjects(): Promise<void> {
+    if (!pack) return;
+    try {
+      const entries = await backend.list(joinPath(pack.root, "tools/slotify/projects"));
+      savedProjects = entries
+        .filter((entry) => !entry.dir && entry.name.endsWith(".guiproj.json"))
+        .map((entry) => entry.name);
+    } catch {
+      savedProjects = [];
+    }
+  }
+
+  function openInEditor(): void {
+    if (!pack || !selected || !baseSheet) return;
+    const texture = baseSheet.texture;
+    const opened = newProject(selected.folder, selected.name, formatCodepoint(selected.codepoint));
+    opened.ascent = selected.ascent;
+    opened.textureFile = selected.textureFile;
+    opened.background = { textureFile: selected.textureFile };
+
+    // Suggest hotspots (and the row count) from the cells the artist actually drew.
+    const cells = detectCells(texture, selected.ascent);
+    if (cells.length > 0) {
+      opened.rows = Math.max(...cells.map((cell) => cell.row)) + 1;
+      opened.hotspots = [{ id: "detected", role: "action", slots: cells.map((cell) => cell.row * 9 + cell.col) }];
+    }
+
+    project = opened;
+    editorBackground = texture;
+    mode = "editor";
+  }
+
+  function newScreen(): void {
+    if (!pack) return;
+    const free = nextFree(pack.registry, { module: "new", first: 0xe8e0, last: 0xf8ff });
+    project = newProject("mymodule", "screen1", formatCodepoint(free ?? 0xe8e0));
+    editorBackground = undefined;
+    mode = "editor";
+  }
+
+  async function openProject(name: string): Promise<void> {
+    if (!pack) return;
+    const text = await backend.readText(joinPath(pack.root, "tools/slotify/projects", name));
+    const opened = parseProject(text);
+    let texture: Raster | undefined;
+    if (opened.background) {
+      const path = await resolveTexture(backend, pack, opened.background.textureFile);
+      if (path) texture = decodeTexture(await backend.read(path));
+    }
+    project = opened;
+    editorBackground = texture;
+    mode = "editor";
+  }
+
   const ascentCheck = $derived.by(() => {
     if (!selected || !measurements) return null;
     for (let row = 0; row < measurements.impliedAscents.length; row++) {
@@ -126,6 +188,19 @@
   });
 </script>
 
+{#if mode === "editor" && project && pack}
+  <Editor
+    bind:project={project as Project}
+    background={editorBackground}
+    {backend}
+    packRoot={pack.root}
+    fontPath={pack.profile.paths.fontDir + "/gui.json"}
+    onExit={() => {
+      mode = "viewer";
+      void refreshProjects();
+    }}
+  />
+{:else}
 <main>
   <aside class="sidebar">
     <header class="brand">
@@ -135,6 +210,19 @@
 
     {#if pack}
       <p class="meta">{pack.fonts.length} fonts · {pack.registry.glyphs.size} glyphs · {pack.screens.length} sheets</p>
+
+      <button class="primary" onclick={newScreen}>+ New screen</button>
+
+      {#if savedProjects.length > 0}
+        <details class="projects" open>
+          <summary>Projects <span class="count">{savedProjects.length}</span></summary>
+          <ul>
+            {#each savedProjects as name}
+              <li><button onclick={() => openProject(name)}>{name.replace(".guiproj.json", "")}</button></li>
+            {/each}
+          </ul>
+        </details>
+      {/if}
 
       {#if pack.collisions.length > 0}
         <details class="collisions" open>
@@ -183,6 +271,9 @@
   <aside class="inspector">
     {#if selected}
       <h2>{selected.name}</h2>
+      {#if baseSheet}
+        <button class="primary" onclick={openInEditor}>Open in editor</button>
+      {/if}
       <dl>
         <dt>Codepoint</dt>
         <dd>{formatCodepoint(selected.codepoint)} · {selected.fontFile}</dd>
@@ -243,6 +334,7 @@
     {/if}
   </aside>
 </main>
+{/if}
 
 <style>
   :global(body) {
@@ -311,6 +403,45 @@
   .meta {
     color: #9a958c;
     font-size: 0.8rem;
+  }
+
+  .primary {
+    display: block;
+    width: 100%;
+    margin: 0.4rem 0;
+    background: #3b2a1a;
+    color: #ffc65c;
+    border: 1px solid #7a5220;
+    border-radius: 6px;
+    padding: 0.5rem;
+    font: inherit;
+    cursor: pointer;
+    min-height: 38px;
+  }
+
+  .projects {
+    font-size: 0.82rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .projects ul {
+    list-style: none;
+    margin: 0.25rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .projects button {
+    width: 100%;
+    text-align: left;
+    background: #26262d;
+    color: inherit;
+    border: 1px solid #33333b;
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    font: inherit;
+    cursor: pointer;
   }
 
   .collisions {
