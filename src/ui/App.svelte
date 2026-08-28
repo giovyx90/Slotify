@@ -16,6 +16,7 @@
     loadGameFont,
     loadInfoboxSkin,
     loadPack,
+    loadPanelSkin,
     measureSheet,
     resolveTexture,
     type LoadedPack,
@@ -48,6 +49,7 @@
   let savedProjects: string[] = $state([]);
   let gameFont: BitmapFont | null = $state(null);
   let infoboxSkin: { raster: Raster; border: number } | undefined = $state(undefined);
+  let panelSkin: { raster: Raster; border: number } | undefined = $state(undefined);
   const mono5 = buildMono5Font();
   const fonts = $derived({ minecraft: gameFont ?? undefined, mono5 });
 
@@ -79,6 +81,7 @@
         void refreshProjects();
         gameFont = await loadGameFont(backend, pack);
         infoboxSkin = (await loadInfoboxSkin(backend, pack)) ?? undefined;
+        panelSkin = (await loadPanelSkin(backend, pack)) ?? undefined;
       } catch (error) {
         status = `Failed to open pack: ${error}`;
       }
@@ -208,6 +211,7 @@
     fontPath={pack.profile.paths.fontDir + "/gui.json"}
     {fonts}
     {infoboxSkin}
+    {panelSkin}
     onExit={() => {
       mode = "viewer";
       void refreshProjects();

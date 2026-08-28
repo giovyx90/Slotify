@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { regionKeyAt, regionRect } from "../engine/carve";
   import { renderScreen } from "../engine/chestRenderer";
   import {
     componentFromElements,
@@ -41,6 +42,7 @@
     fontPath,
     fonts,
     infoboxSkin,
+    panelSkin,
     onExit,
   }: {
     project: Project;
@@ -50,6 +52,7 @@
     fontPath: string;
     fonts: { minecraft?: BitmapFont; mono5?: BitmapFont };
     infoboxSkin?: { raster: Raster; border: number };
+    panelSkin?: { raster: Raster; border: number };
     onExit: () => void;
   } = $props();
 
@@ -77,11 +80,11 @@
   let rconPort = $state(25575);
   let rconPassword = $state("");
 
-  const context = $derived<RenderContext>({ fonts, sprites: spriteRasters, infoboxSkin });
+  const context = $derived<RenderContext>({ fonts, sprites: spriteRasters, infoboxSkin, panelSkin });
   const baked = $derived(bakeSheet(project, background, context));
   const selected = $derived(project.elements.find((element) => element.id === selectedId) ?? null);
   const hasText = $derived(
-    selected != null && ["button", "text", "infobox", "tiles"].includes(selected.kind),
+    selected != null && ["button", "text", "infobox", "tiles", "panel"].includes(selected.kind),
   );
 
   function nextId(): string {
@@ -130,8 +133,12 @@
         texture: baked.sheet,
       },
       pad: PAD,
+      // When the window is baked into the sheet, drawing it again underneath would
+      // fill the carved holes back in — the checkerboard behind IS the transparency.
+      bare: project.bakeWindow ?? false,
       hiddenContainerSlots: new Set(project.hiddenSlots ?? []),
       hiddenInvSlots: new Set(project.hiddenInvSlots ?? []),
+      holes: new Set(project.holes ?? []),
     });
 
     const offscreen = document.createElement("canvas");
@@ -181,9 +188,10 @@
     }
 
     if (tool === "erase") {
-      for (const slot of project.hiddenSlots ?? []) {
-        const rect = slotWindowRect(Math.floor(slot / COLS), slot % COLS);
-        fill(rect.x, rect.y, rect.w, rect.h, "rgba(200,90,90,0.3)");
+      for (const hole of project.holes ?? []) {
+        const region = regionRect(hole, project.rows);
+        fill(region.x, region.y, region.w, region.h, "rgba(200,90,90,0.3)");
+        stroke(region.x, region.y, region.w, region.h, "rgba(200,90,90,0.8)");
       }
     }
 
@@ -261,10 +269,23 @@
     }
 
     if (current && adjacent) {
-      current.cells = [...cells, cell];
-      refreshTileBox(current);
-      touch();
-      return;
+      // An infobox breaks after 12 tiles of width: growing past that starts a new box.
+      if (tileKind === "infobox") {
+        const cols = [...cells.map(([, c]) => c), col];
+        if (Math.max(...cols) - Math.min(...cols) + 1 > 12) {
+          statusLine = "infobox capped at 12 tiles wide — started a new one";
+        } else {
+          current.cells = [...cells, cell];
+          refreshTileBox(current);
+          touch();
+          return;
+        }
+      } else {
+        current.cells = [...cells, cell];
+        refreshTileBox(current);
+        touch();
+        return;
+      }
     }
 
     const element: Element = {
@@ -282,29 +303,17 @@
     selectedId = element.id;
   }
 
-  /** Tap a slot to remove it (and tap again to bring it back) — container or inventory. */
+  /**
+   * Tap any region — a slot, the top band, a margin — and it is punched clean out of
+   * the window: a transparent hole the contour redraws around. Tap again to restore.
+   */
   function tapErase(point: { x: number; y: number }): void {
-    const col = Math.floor((point.x - GRID_X) / CELL);
-    if (col < 0 || col >= COLS) return;
-
-    const containerRow = Math.floor((point.y - GRID_Y) / CELL);
-    if (containerRow >= 0 && containerRow < project.rows) {
-      const index = slotIndex(containerRow, col);
-      const hidden = new Set(project.hiddenSlots ?? []);
-      if (hidden.has(index)) hidden.delete(index);
-      else hidden.add(index);
-      project = { ...project, hiddenSlots: [...hidden].sort((a, b) => a - b) };
-      return;
-    }
-
-    const invRow = Math.floor((point.y - playerInvY(project.rows)) / CELL);
-    const isHotbar = Math.floor((point.y - hotbarY(project.rows)) / CELL) === 0;
-    const invIndex = isHotbar ? 27 + col : invRow >= 0 && invRow < 3 ? invRow * COLS + col : null;
-    if (invIndex === null) return;
-    const hidden = new Set(project.hiddenInvSlots ?? []);
-    if (hidden.has(invIndex)) hidden.delete(invIndex);
-    else hidden.add(invIndex);
-    project = { ...project, hiddenInvSlots: [...hidden].sort((a, b) => a - b) };
+    const key = regionKeyAt(point.x, point.y, project.rows);
+    if (!key) return;
+    const holes = new Set(project.holes ?? []);
+    if (holes.has(key)) holes.delete(key);
+    else holes.add(key);
+    project = { ...project, holes: [...holes].sort() };
   }
 
   function onPointerDown(event: PointerEvent): void {
@@ -673,7 +682,7 @@
         <p class="hint">Tap cells with the {selected.tileKind} tool to grow or shrink this piece.</p>
       {/if}
 
-      {#if selected.kind === "button" || selected.kind === "text" || (selected.kind === "tiles" && selected.tileKind === "button")}
+      {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "panel" || (selected.kind === "tiles" && selected.tileKind === "button")}
         <label class="row">label <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextSize(selected!); touch(); }} /></label>
       {/if}
 
@@ -690,7 +699,16 @@
             <button class="mini danger" onclick={() => removeLine(index)}>×</button>
           </div>
         {/each}
-        <button onclick={addLine}>+ line</button>
+        <div class="row2">
+          <button onclick={addLine}>+ line</button>
+          <label>gap
+            <select value={selected.lineGap ?? 2} onchange={(event) => { selected!.lineGap = Number((event.target as HTMLSelectElement).value) as 2 | 3 | 4; touch(); }}>
+              <option value={2}>2px</option>
+              <option value={3}>3px</option>
+              <option value={4}>4px</option>
+            </select>
+          </label>
+        </div>
       {/if}
 
       {#if hasText}
@@ -745,9 +763,11 @@
     <label class="row">codepoint <input bind:value={project.codepoint} /></label>
     <label class="row">fallback <input bind:value={project.fallbackTitle} /></label>
     <label class="row"><input type="checkbox" bind:checked={guides} /> guides</label>
+    <label class="row"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
     <p class="hint">
-      erase tool: tap any slot — container or inventory — to remove it; tap again to restore.
-      Hidden: {project.hiddenSlots?.length ?? 0} container, {project.hiddenInvSlots?.length ?? 0} inventory.
+      erase tool: tap any part of the window — a slot, the top band, a margin — and it
+      becomes a transparent hole; the contour redraws around it. Tap again to restore.
+      Holes: {project.holes?.length ?? 0}.
     </p>
 
     <h3>Measured</h3>

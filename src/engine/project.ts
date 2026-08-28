@@ -60,6 +60,8 @@ export const ElementSchema = z.object({
   tileKind: z.enum(["button", "infobox"]).optional(),
   /** `tiles` only: the lattice cells this region occupies. Adjacent cells merge. */
   cells: z.array(TileCellSchema).optional(),
+  /** Vertical gap between infobox/text lines, pixels. */
+  lineGap: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional(),
 });
 
 export const HotspotSchema = z.object({
@@ -90,6 +92,16 @@ export const ProjectSchema = z.object({
   hiddenSlots: z.array(z.number().int().nonnegative()).optional(),
   /** Viewer-inventory slots removed: 0–26 main inventory, 27–35 hotbar. */
   hiddenInvSlots: z.array(z.number().int().nonnegative()).optional(),
+  /**
+   * Region keys (carve.ts) punched clean out of the window — fully transparent holes
+   * the window contour redraws around.
+   */
+  holes: z.array(z.string()).optional(),
+  /**
+   * Draw the (possibly carved) window into the exported sheet itself — how real NEXT
+   * screens work over the erased generic_54 texture. Default for new screens.
+   */
+  bakeWindow: z.boolean().optional(),
 });
 
 export type Element = z.infer<typeof ElementSchema>;
@@ -111,6 +123,7 @@ export function newProject(module: string, screenKey: string, codepoint: string)
     textureFile: `custom_ui/${module}/${screenKey}.png`,
     elements: [],
     hotspots: [],
+    bakeWindow: true,
   };
 }
 

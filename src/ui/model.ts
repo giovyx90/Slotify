@@ -30,6 +30,9 @@ export interface Profile {
     /** The project's real infobox art (repo-relative); rendered as a ninepatch. */
     infoboxSkin?: string;
     infoboxSkinBorder?: number;
+    /** The project's panel / title-box art (NEXT: boxtitolo.png). */
+    panelSkin?: string;
+    panelSkinBorder?: number;
   };
   codepointRanges?: { module: string; range: [string, string] }[];
 }
@@ -189,23 +192,37 @@ export async function loadGameFont(backend: FsBackend, pack: LoadedPack): Promis
   return null;
 }
 
+export interface Skin {
+  raster: Raster;
+  border: number;
+}
+
 /**
- * The profile's own infobox texture, cropped to its opaque box — so the editor's
- * infobox is the artist's infobox, not an imitation of it.
+ * A profile-referenced ninepatch skin, cropped to its opaque box — so the editor's
+ * infobox and panel are the artist's art, not imitations of it.
  */
-export async function loadInfoboxSkin(
+export async function loadSkin(
   backend: FsBackend,
   pack: LoadedPack,
-): Promise<{ raster: Raster; border: number } | null> {
-  const path = pack.profile.paths.infoboxSkin;
+  path: string | undefined,
+  border: number,
+): Promise<Skin | null> {
   if (!path) return null;
   try {
     const raster = cropToOpaque(decodePng(await backend.read(joinPath(pack.root, path))));
-    return { raster, border: pack.profile.paths.infoboxSkinBorder ?? 4 };
+    return { raster, border };
   } catch (error) {
-    console.warn("infobox skin failed to load:", error);
+    console.warn(`skin ${path} failed to load:`, error);
     return null;
   }
+}
+
+export async function loadInfoboxSkin(backend: FsBackend, pack: LoadedPack): Promise<Skin | null> {
+  return loadSkin(backend, pack, pack.profile.paths.infoboxSkin, pack.profile.paths.infoboxSkinBorder ?? 4);
+}
+
+export async function loadPanelSkin(backend: FsBackend, pack: LoadedPack): Promise<Skin | null> {
+  return loadSkin(backend, pack, pack.profile.paths.panelSkin, pack.profile.paths.panelSkinBorder ?? 3);
 }
 
 const COMPONENTS_DIR = "tools/slotify/components";

@@ -22,10 +22,15 @@ export function tileRect(row: number, col: number): Rect {
   return { x: TILE_X0 + TILE * col, y: TILE_Y0 + TILE * row, w: TILE, h: TILE };
 }
 
+/**
+ * The lattice covers the whole 256 sheet, not just the window — an infobox can sit
+ * beside or below the GUI, Coreline-style. Cells that would overflow the sheet canvas
+ * are refused (12 is the last full 18px cell on a 256 canvas).
+ */
 export function cellAt(x: number, y: number): TileCell | null {
   const col = Math.floor((x - TILE_X0) / TILE);
   const row = Math.floor((y - TILE_Y0) / TILE);
-  return row >= 0 && col >= 0 ? [row, col] : null;
+  return row >= 0 && col >= 0 && row <= 12 && col <= 12 ? [row, col] : null;
 }
 
 export function regionBBox(cells: readonly TileCell[]): Rect {

@@ -11,6 +11,7 @@ import {
   playerInvY,
   windowHeight,
 } from "./geometry";
+import { regionKeyAt } from "./carve";
 import { blit, makeRaster, type Raster } from "./raster";
 import { originsOf, spacerString, type SpacerSet, NEXT_SPACERS } from "./spacers";
 
@@ -42,33 +43,89 @@ export interface RenderOptions {
   hiddenContainerSlots?: ReadonlySet<number>;
   /** Individual viewer-inventory slots removed: 0–26 main, 27–35 hotbar. */
   hiddenInvSlots?: ReadonlySet<number>;
+  /**
+   * Region keys (see `carve.ts`) punched clean out of the window: fully transparent,
+   * with the window edge and bevel redrawn around the remaining shape.
+   */
+  holes?: ReadonlySet<string>;
 }
 
-/** The bare window, top-left anchored, on a canvas exactly `WINDOW_W × windowHeight`. */
+/**
+ * The bare window, top-left anchored, on a canvas exactly `WINDOW_W × windowHeight`.
+ *
+ * With `holes`, the panel is built from a mask instead: carved regions are fully
+ * transparent and the edge (dark outline) plus bevel (light above/left, dark
+ * below/right) redraw themselves around whatever shape remains — a notch in the window
+ * looks exactly like a corner of the window.
+ */
 export function renderWindow(options: RenderOptions): Raster {
   const height = windowHeight(options.rows);
   const raster = makeRaster(WINDOW_W, height);
+  const holes = options.holes;
 
-  rect(raster, 0, 0, WINDOW_W, height, PANEL);
-  for (let x = 0; x < WINDOW_W; x++) {
-    put(raster, x, 0, PANEL_EDGE);
-    put(raster, x, height - 1, PANEL_EDGE);
+  if (!holes || holes.size === 0) {
+    rect(raster, 0, 0, WINDOW_W, height, PANEL);
+    for (let x = 0; x < WINDOW_W; x++) {
+      put(raster, x, 0, PANEL_EDGE);
+      put(raster, x, height - 1, PANEL_EDGE);
+    }
+    for (let y = 0; y < height; y++) {
+      put(raster, 0, y, PANEL_EDGE);
+      put(raster, WINDOW_W - 1, y, PANEL_EDGE);
+    }
+    for (let x = 1; x < WINDOW_W - 1; x++) {
+      put(raster, x, 1, PANEL_LIGHT);
+      put(raster, x, height - 2, PANEL_DARK);
+    }
+    for (let y = 1; y < height - 1; y++) {
+      put(raster, 1, y, PANEL_LIGHT);
+      put(raster, WINDOW_W - 2, y, PANEL_DARK);
+    }
+  } else {
+    // 0 outside, 1 panel, 2 edge, 3 light bevel, 4 dark bevel.
+    const mask = new Uint8Array(WINDOW_W * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < WINDOW_W; x++) {
+        const key = regionKeyAt(x, y, options.rows);
+        mask[y * WINDOW_W + x] = key !== null && !holes.has(key) ? 1 : 0;
+      }
+    }
+
+    const inside = (x: number, y: number): boolean =>
+      x >= 0 && x < WINDOW_W && y >= 0 && y < height && mask[y * WINDOW_W + x] !== 0;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < WINDOW_W; x++) {
+        if (!inside(x, y)) continue;
+        if (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)) {
+          mask[y * WINDOW_W + x] = 2;
+        }
+      }
+    }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < WINDOW_W; x++) {
+        if (mask[y * WINDOW_W + x] !== 1) continue;
+        const edge = (dx: number, dy: number): boolean =>
+          inside(x + dx, y + dy) && mask[(y + dy) * WINDOW_W + (x + dx)] === 2;
+        if (edge(0, -1) || edge(-1, 0)) mask[y * WINDOW_W + x] = 3;
+        else if (edge(0, 1) || edge(1, 0)) mask[y * WINDOW_W + x] = 4;
+      }
+    }
+
+    const colours = [null, PANEL, PANEL_EDGE, PANEL_LIGHT, PANEL_DARK] as const;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < WINDOW_W; x++) {
+        const colour = colours[mask[y * WINDOW_W + x]!];
+        if (colour) put(raster, x, y, colour);
+      }
+    }
   }
-  for (let y = 0; y < height; y++) {
-    put(raster, 0, y, PANEL_EDGE);
-    put(raster, WINDOW_W - 1, y, PANEL_EDGE);
-  }
-  for (let x = 1; x < WINDOW_W - 1; x++) {
-    put(raster, x, 1, PANEL_LIGHT);
-    put(raster, x, height - 2, PANEL_DARK);
-  }
-  for (let y = 1; y < height - 1; y++) {
-    put(raster, 1, y, PANEL_LIGHT);
-    put(raster, WINDOW_W - 2, y, PANEL_DARK);
-  }
+
+  const carved = (key: string): boolean => holes?.has(key) ?? false;
 
   for (let index = 0; index < COLS * options.rows; index++) {
     if (options.hiddenContainerSlots?.has(index)) continue;
+    if (carved(`con:${Math.floor(index / COLS)}:${index % COLS}`)) continue;
     drawSlotWell(raster, GRID_X + (index % COLS) * CELL, GRID_Y + Math.floor(index / COLS) * CELL);
   }
 
@@ -77,12 +134,14 @@ export function renderWindow(options: RenderOptions): Raster {
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < COLS; col++) {
         if (options.hiddenInvSlots?.has(row * COLS + col)) continue;
+        if (carved(`inv:${row}:${col}`)) continue;
         drawSlotWell(raster, GRID_X + col * CELL, invY + row * CELL);
       }
     }
     const hbY = hotbarY(options.rows);
     for (let col = 0; col < COLS; col++) {
       if (options.hiddenInvSlots?.has(27 + col)) continue;
+      if (carved(`hot:0:${col}`)) continue;
       drawSlotWell(raster, GRID_X + col * CELL, hbY);
     }
   }
@@ -105,6 +164,12 @@ export interface ComposeOptions extends RenderOptions {
   spacers?: SpacerSet;
   /** Transparent margin around the window, so overflowing artwork stays visible. */
   pad?: number;
+  /**
+   * Skip the procedural window entirely — for sheets that bake the (possibly carved)
+   * window into their own pixels, the way real NEXT screens do over the erased
+   * `generic_54` texture.
+   */
+  bare?: boolean;
 }
 
 /**
@@ -114,12 +179,9 @@ export interface ComposeOptions extends RenderOptions {
  */
 export function renderScreen(options: ComposeOptions): Raster {
   const pad = options.pad ?? 0;
-  const window = renderWindow(options);
-  const raster = makeRaster(
-    Math.max(window.width, 264) + 2 * pad,
-    Math.max(window.height, 256) + 2 * pad,
-  );
-  blit(raster, window, pad, pad);
+  const height = windowHeight(options.rows);
+  const raster = makeRaster(Math.max(WINDOW_W, 264) + 2 * pad, Math.max(height, 256) + 2 * pad);
+  if (!options.bare) blit(raster, renderWindow(options), pad, pad);
 
   const sheets = [options.base, ...(options.overlays ?? [])];
   const spacers = options.spacers ?? NEXT_SPACERS;

@@ -58,10 +58,16 @@ The roadmap, each stage useful on its own:
 1. `npm run dev`, open `localhost:1420` (or the packaged app once built).
 2. The **viewer** lists every painted sheet in the pack with collisions flagged; pick
    one to see measurements, or **Open in editor** to start from it.
-3. **+ New screen** starts blank: pick a tool (slot/button/panel/well/text/infobox),
-   tap the canvas to place, drag to move (edges snap), refine with the 1px nudge pad.
-   Colours, labels and infobox lines live in the right panel. Paint hotspots by tapping
-   slots with a group active.
+3. **+ New screen** starts blank. Buttons and infoboxes are **connectable tiles**: tap
+   a grid cell for a 1×1 piece, tap the next cell and it grows into one merged piece —
+   the bevel wraps the region outline, and recolouring hue-shifts the highlights and
+   shadows instead of leaving them white and black. The **erase** tool removes (and
+   restores) individual container or player-inventory slots. Free elements
+   (slot/text/panel/well) place with a tap, drag with edge snapping, and refine with
+   the 1px nudge pad. Infoboxes render the profile's own artist texture as a ninepatch,
+   with a colour per line; all text can use the pack font or the built-in 5×5 mono,
+   with an optional directional shadow. Paint hotspots by tapping slots with a group
+   active.
 4. **Library**: check some layers, name them, *save ✓* — or *Import PNG…* — then tap
    any library entry and tap the canvas to place it.
 5. **Aa Tag generator** renders styled game-font text; download it or save it to the

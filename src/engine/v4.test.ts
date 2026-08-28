@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
+import { regionKeyAt, regionRect } from "./carve";
 import { renderWindow } from "./chestRenderer";
 import { buildMono5Font } from "./mono5";
 import { cropToOpaque, drawNinepatch } from "./ninepatch";
@@ -124,6 +125,49 @@ describe("ninepatch", () => {
     expect(cropped.width).toBe(4);
     expect(cropped.height).toBe(4);
     expect(rgbAt(cropped, 0, 0)).toEqual([9, 9, 9]);
+  });
+});
+
+describe("carved holes", () => {
+  it("maps every window pixel to exactly one region", () => {
+    // rows=6: container rows at y 17..124, gap, inv rows, hotbar band.
+    expect(regionKeyAt(10, 20, 6)).toBe("con:0:0");
+    expect(regionKeyAt(3, 20, 6)).toBe("con:0:-1"); // left margin
+    expect(regionKeyAt(100, 5, 6)).toBe("top:0:5");
+    expect(regionKeyAt(100, 130, 6)).toBe("gap:0:5");
+    expect(regionKeyAt(100, 145, 6)).toBe("inv:0:5");
+    expect(regionKeyAt(100, 200, 6)).toBe("hot:0:5");
+    expect(regionKeyAt(-1, 20, 6)).toBeNull();
+    expect(regionKeyAt(0, 300, 6)).toBeNull();
+  });
+
+  it("punches a transparent hole and redraws the contour around it", () => {
+    const carved = renderWindow({ rows: 2, holes: new Set(["con:0:0"]) });
+    const region = regionRect("con:0:0", 2);
+
+    // Dead centre of the hole: fully transparent.
+    expect(alphaAt(carved, region.x + 9, region.y + 9)).toBe(0);
+    // The pixel just left of the hole (inside the left margin) became an edge…
+    expect(rgbAt(carved, region.x - 1, region.y + 9)).toEqual([55, 55, 55]);
+    // …and one further in carries the bevel (right side of a hole = light face? no:
+    // the pixel is left of the hole, so the hole is to its right → dark bevel).
+    expect(rgbAt(carved, region.x - 2, region.y + 9)).toEqual([85, 85, 85]);
+    // Above the hole (the top band): edge row, with a dark bevel above it — the hole
+    // reads exactly like a bottom edge of the window.
+    expect(rgbAt(carved, region.x + 9, region.y - 1)).toEqual([55, 55, 55]);
+    expect(rgbAt(carved, region.x + 9, region.y - 2)).toEqual([85, 85, 85]);
+    // The window's own outer corner is still an edge.
+    expect(rgbAt(carved, 0, 0)).toEqual([55, 55, 55]);
+  });
+
+  it("bakes the carved window into the sheet when bakeWindow is on", () => {
+    const project = newProject("m", "k", "U+E8F0");
+    project.rows = 2;
+    project.holes = ["top:0:0"];
+    const sheet = renderSheet(project); // ascent 13 ⇒ window at sheet (0,0)
+    expect(alphaAt(sheet, 10, 5)).toBe(0); // carved top band cell
+    expect(rgbAt(sheet, 100, 5)).not.toEqual([0, 0, 0]); // rest of the band survives
+    expect(rgbAt(sheet, 10, 20)).toEqual(WELL_FILL.slice(0, 3)); // slot 0 well intact
   });
 });
 

@@ -153,6 +153,7 @@ describe("rendering the new element kinds", () => {
 
   it("draws the fallback infobox (black ring, inner border) and a placeholder for a missing sprite", () => {
     const project = newProject("m", "k", "U+E8F0");
+    project.bakeWindow = false; // element look in isolation — no window pixels beneath
     project.elements.push({ id: "i", kind: "infobox", x: 10, y: 60, w: 80, h: 30, lines: ["A"], borderColor: "#F0A831" });
     project.elements.push({ id: "s", kind: "sprite", x: 120, y: 60, w: 10, h: 10, sprite: "missing" });
     const sheet = renderSheet(project, undefined, { fonts: { minecraft: font } });

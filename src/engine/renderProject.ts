@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { renderWindow } from "./chestRenderer";
 import { SHEET_CANVAS, SHEET_TO_WINDOW_Y } from "./geometry";
 import { drawNinepatch } from "./ninepatch";
 import {
@@ -40,6 +41,8 @@ export interface RenderContext {
   sprites?: Map<string, Raster>;
   /** The profile's real infobox texture, cropped, with its ninepatch border. */
   infoboxSkin?: { raster: Raster; border: number };
+  /** The profile's panel/title-box texture (NEXT: boxtitolo), same treatment. */
+  panelSkin?: { raster: Raster; border: number };
 }
 
 // Fallback infobox palette, measured from the NEXT template PNG — used only when the
@@ -137,7 +140,7 @@ function drawInfoboxLines(
 ): void {
   const font = fontFor(element, context);
   if (!font) return;
-  const lineHeight = font.cellH + 2;
+  const lineHeight = font.cellH + (element.lineGap ?? 2);
   (element.lines ?? []).forEach((line, index) => {
     const colour = element.lineColors?.[index] ?? element.textColor ?? INFOBOX_TEXT_DEFAULT;
     drawLine(sheet, font, line, colour, element.shadow ?? "none", x + 5, y + 5 + index * lineHeight);
@@ -165,9 +168,17 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
     }
 
     case "panel": {
-      const { fill, bevels } = bevelsFor(element);
-      rect(sheet, x, y, element.w, element.h, fill);
-      outline(sheet, x, y, element.w, element.h, element.color ? bevels.edge : PANEL_EDGE);
+      // The profile's own title-box art wins; a custom colour falls back to procedural.
+      if (context.panelSkin && !element.color) {
+        drawNinepatch(sheet, context.panelSkin.raster, context.panelSkin.border, x, y, element.w, element.h);
+      } else {
+        const { fill, bevels } = bevelsFor(element);
+        rect(sheet, x, y, element.w, element.h, fill);
+        outline(sheet, x, y, element.w, element.h, element.color ? bevels.edge : PANEL_EDGE);
+      }
+      if (element.label && font) {
+        drawLabelCentred(sheet, font, element, x, y, element.w, element.h, TEXT_DEFAULT);
+      }
       break;
     }
 
@@ -217,9 +228,21 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
 
 export function renderSheet(project: Project, background?: Raster, context: RenderContext = {}): Raster {
   const sheet = makeRaster(SHEET_CANVAS, SHEET_CANVAS);
-  if (background) blit(sheet, background, 0, 0);
-
   const dy = project.ascent - SHEET_TO_WINDOW_Y;
+
+  if (project.bakeWindow) {
+    // The window itself — carved holes included — becomes sheet pixels, exactly what a
+    // real NEXT screen paints over the erased generic_54 texture.
+    const window = renderWindow({
+      rows: project.rows,
+      hiddenContainerSlots: new Set(project.hiddenSlots ?? []),
+      hiddenInvSlots: new Set(project.hiddenInvSlots ?? []),
+      holes: new Set(project.holes ?? []),
+    });
+    blit(sheet, window, 0, dy);
+  }
+
+  if (background) blit(sheet, background, 0, 0);
   for (const element of project.elements) drawElement(sheet, element, dy, context);
 
   return sheet;
