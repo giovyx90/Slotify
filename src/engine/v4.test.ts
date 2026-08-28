@@ -141,21 +141,21 @@ describe("carved holes", () => {
     expect(regionKeyAt(0, 300, 6)).toBeNull();
   });
 
-  it("punches a transparent hole and redraws the contour around it", () => {
-    const carved = renderWindow({ rows: 2, holes: new Set(["con:0:0"]) });
-    const region = regionRect("con:0:0", 2);
+  it("frames holes outside the grid, and leaves grid holes to the slots' own rings", () => {
+    const carved = renderWindow({ rows: 2, holes: new Set(["top:0:2", "con:0:0"]) });
 
-    // Dead centre of the hole: fully transparent.
+    // The top-band hole: transparent, and the window contour redraws under it.
+    expect(alphaAt(carved, 50, 8)).toBe(0);
+    expect(rgbAt(carved, 50, 17)).toEqual([55, 55, 55]); // closed border below the void
+
+    // The slot-cell hole: transparent, but NXMenu-clean — no extra frame. The left
+    // margin beside it stays flat panel…
+    const region = regionRect("con:0:0", 2);
     expect(alphaAt(carved, region.x + 9, region.y + 9)).toBe(0);
-    // The pixel just left of the hole (inside the left margin) became an edge…
-    expect(rgbAt(carved, region.x - 1, region.y + 9)).toEqual([55, 55, 55]);
-    // …and one further in carries the bevel (right side of a hole = light face? no:
-    // the pixel is left of the hole, so the hole is to its right → dark bevel).
-    expect(rgbAt(carved, region.x - 2, region.y + 9)).toEqual([85, 85, 85]);
-    // Above the hole (the top band): edge row, with a dark bevel above it — the hole
-    // reads exactly like a bottom edge of the window.
-    expect(rgbAt(carved, region.x + 9, region.y - 1)).toEqual([55, 55, 55]);
-    expect(rgbAt(carved, region.x + 9, region.y - 2)).toEqual([85, 85, 85]);
+    expect(rgbAt(carved, 5, region.y + 9)).toEqual([198, 198, 198]);
+    // …and the neighbouring slot closes itself with its own ring.
+    expect(rgbAt(carved, region.x + region.w, region.y + 9)).toEqual([55, 55, 55]);
+
     // The window's own outer corner is still an edge.
     expect(rgbAt(carved, 0, 0)).toEqual([55, 55, 55]);
   });

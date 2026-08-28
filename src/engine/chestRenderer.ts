@@ -82,22 +82,38 @@ export function renderWindow(options: RenderOptions): Raster {
       put(raster, WINDOW_W - 2, y, PANEL_DARK);
     }
   } else {
-    // 0 outside, 1 panel, 2 edge, 3 light bevel, 4 dark bevel.
+    // 0 outside (framed), 1 panel, 2 edge, 3 light bevel, 4 dark bevel,
+    // 5 frameless hole — a slot cell punched out INSIDE the grid. The window contour
+    // must not wrap those: the neighbouring slots' own rings already close the border,
+    // NXMenu-style, and an extra edge+bevel there reads as a broken frame.
+    const FRAMELESS = 5;
+    const framelessHole = (key: string): boolean => {
+      const [band, , colText] = key.split(":") as [string, string, string];
+      const col = Number(colText);
+      return (band === "con" || band === "inv" || band === "hot") && col >= 0 && col < COLS;
+    };
+
     const mask = new Uint8Array(WINDOW_W * height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
         const key = regionKeyAt(x, y, options.rows);
-        mask[y * WINDOW_W + x] = key !== null && !holes.has(key) ? 1 : 0;
+        mask[y * WINDOW_W + x] =
+          key === null ? 0 : holes.has(key) ? (framelessHole(key) ? FRAMELESS : 0) : 1;
       }
     }
 
-    const inside = (x: number, y: number): boolean =>
-      x >= 0 && x < WINDOW_W && y >= 0 && y < height && mask[y * WINDOW_W + x] !== 0;
+    const at = (x: number, y: number): number =>
+      x >= 0 && x < WINDOW_W && y >= 0 && y < height ? mask[y * WINDOW_W + x]! : 0;
+    const isPanelish = (x: number, y: number): boolean => {
+      const value = at(x, y);
+      return value >= 1 && value <= 4;
+    };
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
-        if (!inside(x, y)) continue;
-        if (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)) {
+        if (!isPanelish(x, y)) continue;
+        // Only a framed void makes an edge; a frameless grid hole leaves the panel flat.
+        if (at(x - 1, y) === 0 || at(x + 1, y) === 0 || at(x, y - 1) === 0 || at(x, y + 1) === 0) {
           mask[y * WINDOW_W + x] = 2;
         }
       }
@@ -105,14 +121,13 @@ export function renderWindow(options: RenderOptions): Raster {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
         if (mask[y * WINDOW_W + x] !== 1) continue;
-        const edge = (dx: number, dy: number): boolean =>
-          inside(x + dx, y + dy) && mask[(y + dy) * WINDOW_W + (x + dx)] === 2;
+        const edge = (dx: number, dy: number): boolean => at(x + dx, y + dy) === 2;
         if (edge(0, -1) || edge(-1, 0)) mask[y * WINDOW_W + x] = 3;
         else if (edge(0, 1) || edge(1, 0)) mask[y * WINDOW_W + x] = 4;
       }
     }
 
-    const colours = [null, PANEL, PANEL_EDGE, PANEL_LIGHT, PANEL_DARK] as const;
+    const colours = [null, PANEL, PANEL_EDGE, PANEL_LIGHT, PANEL_DARK, null] as const;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
         const colour = colours[mask[y * WINDOW_W + x]!];
