@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Example pack",
+  "paths": {
+    "fontDir": "pack/assets/minecraft/font",
+    "guiFont": "gui.json",
+    "textureRoots": ["pack"]
+  },
+  "geometry": {
+    "sheetCanvas": 256,
+    "windowWidth": 176,
+    "cell": 18,
+    "gridOrigin": [8, 18],
+    "sheetToWindowY": 13,
+    "defaultShift": -8
+  },
+  "spacers": {
+    "negativeBase": "U+E8D0",
+    "positiveBase": "U+E8D8",
+    "maxPower": 6
+  },
+  "codepointRanges": [
+    { "module": "example", "range": ["U+E800", "U+E8FF"] }
+  ]
+}

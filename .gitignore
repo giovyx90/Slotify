@@ -1,0 +1,14 @@
+# dependencies / build
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# machine-local configuration — never commit paths, hosts or credentials
+*.profile.local.json
+slotify.dev.json
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,6 @@
+{
+  "//": "Copy to slotify.dev.json (gitignored) and point each root at a local checkout. The dev server only ever serves files under these roots.",
+  "roots": {
+    "next": "C:/path/to/your/pack/repository"
+  }
+}
