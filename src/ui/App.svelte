@@ -67,22 +67,70 @@
     pack && selected ? pack.screens.filter((s) => s.folder === selected!.folder && s.codepoint !== selected!.codepoint) : [],
   );
 
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  let needsFolder = $state(false);
+
+  async function openRoot(root: string): Promise<void> {
+    status = "Reading fonts…";
+    needsFolder = false;
+    pack = await loadPack(backend, root, PROFILE_PATH);
+    status = "";
+    void refreshProjects();
+    gameFont = await loadGameFont(backend, pack);
+    infoboxSkin = (await loadInfoboxSkin(backend, pack)) ?? undefined;
+    panelSkin = (await loadPanelSkin(backend, pack)) ?? undefined;
+    try {
+      localStorage.setItem("slotify.root", root);
+    } catch {
+      // per-viewer convenience only
+    }
+  }
+
+  /** The packaged app's way in: pick the pack repository with the native dialog. */
+  async function pickFolder(): Promise<void> {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const dir = await open({ directory: true, title: "Choose your pack repository (the repo root)" });
+    if (typeof dir === "string") {
+      try {
+        await openRoot(dir.replace(/\\/g, "/"));
+      } catch (error) {
+        status = `Failed to open pack: ${error}`;
+        needsFolder = true;
+      }
+    }
+  }
+
   $effect(() => {
     void (async () => {
       try {
         const roots = await backend.roots();
         const first = Object.entries(roots)[0];
-        if (!first) {
-          status = "No roots configured — copy slotify.dev.example.json to slotify.dev.json and point it at your pack checkout.";
+        if (first) {
+          await openRoot(first[1]);
           return;
         }
-        status = `Reading fonts from ${first[0]}…`;
-        pack = await loadPack(backend, first[1], PROFILE_PATH);
-        status = "";
-        void refreshProjects();
-        gameFont = await loadGameFont(backend, pack);
-        infoboxSkin = (await loadInfoboxSkin(backend, pack)) ?? undefined;
-        panelSkin = (await loadPanelSkin(backend, pack)) ?? undefined;
+
+        if (isTauri) {
+          let remembered: string | null = null;
+          try {
+            remembered = localStorage.getItem("slotify.root");
+          } catch {
+            // fine — ask instead
+          }
+          if (remembered) {
+            try {
+              await openRoot(remembered);
+              return;
+            } catch {
+              // the folder moved — ask again
+            }
+          }
+          needsFolder = true;
+          status = "Pick your pack repository folder to begin.";
+          return;
+        }
+
+        status = "No roots configured — copy slotify.dev.example.json to slotify.dev.json and point it at your pack checkout.";
       } catch (error) {
         status = `Failed to open pack: ${error}`;
       }
@@ -332,6 +380,9 @@
         <section class="card">
           <span class="label-mono">Pack</span>
           <p class="hint">{status}</p>
+          {#if needsFolder}
+            <button class="btn primary block" onclick={pickFolder}>Open pack folder…</button>
+          {/if}
         </section>
       {/if}
     </aside>

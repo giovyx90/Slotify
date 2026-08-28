@@ -48,6 +48,12 @@ export interface RenderOptions {
    * with the window edge and bevel redrawn around the remaining shape.
    */
   holes?: ReadonlySet<string>;
+  /**
+   * Rows shaved off the window's top/bottom with the contour re-closed — a window that
+   * would overflow the sheet is rebuilt shorter, never sliced raw.
+   */
+  cropTop?: number;
+  cropBottom?: number;
 }
 
 /**
@@ -62,8 +68,10 @@ export function renderWindow(options: RenderOptions): Raster {
   const height = windowHeight(options.rows);
   const raster = makeRaster(WINDOW_W, height);
   const holes = options.holes;
+  const cropTop = Math.max(0, options.cropTop ?? 0);
+  const cropBottom = Math.max(0, options.cropBottom ?? 0);
 
-  if (!holes || holes.size === 0) {
+  if ((!holes || holes.size === 0) && cropTop === 0 && cropBottom === 0) {
     rect(raster, 0, 0, WINDOW_W, height, PANEL);
     for (let x = 0; x < WINDOW_W; x++) {
       put(raster, x, 0, PANEL_EDGE);
@@ -96,9 +104,10 @@ export function renderWindow(options: RenderOptions): Raster {
     const mask = new Uint8Array(WINDOW_W * height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
+        if (y < cropTop || y >= height - cropBottom) continue; // shaved: framed outside
         const key = regionKeyAt(x, y, options.rows);
         mask[y * WINDOW_W + x] =
-          key === null ? 0 : holes.has(key) ? (framelessHole(key) ? FRAMELESS : 0) : 1;
+          key === null ? 0 : holes?.has(key) ? (framelessHole(key) ? FRAMELESS : 0) : 1;
       }
     }
 
@@ -137,11 +146,17 @@ export function renderWindow(options: RenderOptions): Raster {
   }
 
   const carved = (key: string): boolean => holes?.has(key) ?? false;
+  // A well whose ring would cross a shaved band is dropped whole — never half a slot.
+  // The ring spans wellY-1 (shadow) to wellY+16 (light), 18 rows in all.
+  const shaved = (wellY: number): boolean =>
+    wellY - 1 < cropTop || wellY + 17 > height - cropBottom;
 
   for (let index = 0; index < COLS * options.rows; index++) {
     if (options.hiddenContainerSlots?.has(index)) continue;
     if (carved(`con:${Math.floor(index / COLS)}:${index % COLS}`)) continue;
-    drawSlotWell(raster, GRID_X + (index % COLS) * CELL, GRID_Y + Math.floor(index / COLS) * CELL);
+    const wellY = GRID_Y + Math.floor(index / COLS) * CELL;
+    if (shaved(wellY)) continue;
+    drawSlotWell(raster, GRID_X + (index % COLS) * CELL, wellY);
   }
 
   if (!options.hideViewerInventory) {
@@ -150,6 +165,7 @@ export function renderWindow(options: RenderOptions): Raster {
       for (let col = 0; col < COLS; col++) {
         if (options.hiddenInvSlots?.has(row * COLS + col)) continue;
         if (carved(`inv:${row}:${col}`)) continue;
+        if (shaved(invY + row * CELL)) continue;
         drawSlotWell(raster, GRID_X + col * CELL, invY + row * CELL);
       }
     }
@@ -157,6 +173,7 @@ export function renderWindow(options: RenderOptions): Raster {
     for (let col = 0; col < COLS; col++) {
       if (options.hiddenInvSlots?.has(27 + col)) continue;
       if (carved(`hot:0:${col}`)) continue;
+      if (shaved(hbY)) continue;
       drawSlotWell(raster, GRID_X + col * CELL, hbY);
     }
   }

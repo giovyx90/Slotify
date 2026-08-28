@@ -171,6 +171,24 @@ describe("carved holes", () => {
   });
 });
 
+describe("cropped windows", () => {
+  it("rebuilds a shaved window shorter with the contour re-closed, never sliced raw", () => {
+    const cropped = renderWindow({ rows: 2, cropTop: 5 });
+    expect(alphaAt(cropped, 50, 4)).toBe(0); // shaved band is gone
+    expect(rgbAt(cropped, 50, 5)).toEqual([55, 55, 55]); // top edge re-closed
+    expect(rgbAt(cropped, 50, 6)).toEqual([255, 255, 255]); // light bevel under it
+  });
+
+  it("bakes an ascent below 13 as a shorter window at the sheet top", () => {
+    const project = newProject("m", "k", "U+E8F0");
+    project.rows = 2;
+    project.ascent = 8; // dy = −5: five window rows would fall above the sheet
+    const sheet = renderSheet(project);
+    expect(rgbAt(sheet, 50, 0)).toEqual([55, 55, 55]); // re-closed edge right at row 0
+    expect(rgbAt(sheet, 10, 13)).toEqual(WELL_FILL.slice(0, 3)); // slot 0 well, shifted up 5
+  });
+});
+
 describe("removable slots", () => {
   it("skips hidden container and inventory wells", () => {
     const full = renderWindow({ rows: 2 });

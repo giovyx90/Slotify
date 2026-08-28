@@ -25,7 +25,9 @@
   import { rconExec } from "../platform/rcon";
   import { decodeTexture, deleteComponent, listComponents, loadSpriteRaster, saveComponent } from "./model";
 
-  const PAD = 32;
+  // The canvas margin grows with the space above the window (ascent − 13), so a GUI
+  // pushed down to make room for a title panel keeps that room visible and tappable.
+  const PAD = $derived(Math.max(32, (project?.ascent ?? 13) - 13 + 16));
   const ROLE_COLOURS: Record<string, string> = {
     header: "#E8B23A", stat: "#568FD6", list: "#6AB060", action: "#D6783C",
     chart: "#966EBE", info: "#5FB4B4", empty: "#C85A5A", nav: "#78788C",
@@ -946,6 +948,16 @@
           <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={project.rows} /></label>
           <label class="field"><span>shift</span><input type="number" bind:value={project.shift} /></label>
           <label class="field"><span>ascent</span><input type="number" bind:value={project.ascent} /></label>
+          <label class="field" title="Space above the GUI on the sheet — the friendly face of the ascent. Raise it to fit a title panel above the window.">
+            <span>gui ↓</span>
+            <input
+              type="number"
+              min="-13"
+              max="60"
+              value={project.ascent - 13}
+              oninput={(event) => { project.ascent = 13 + Number((event.target as HTMLInputElement).value); touch(); }}
+            />
+          </label>
           <label class="field"><span>zoom</span><input type="number" min="1" max="8" bind:value={zoom} /></label>
         </div>
         <label class="field top"><span>codepoint</span><input bind:value={project.codepoint} /></label>

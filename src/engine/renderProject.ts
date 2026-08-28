@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { renderWindow } from "./chestRenderer";
-import { SHEET_CANVAS, SHEET_TO_WINDOW_Y } from "./geometry";
+import { SHEET_CANVAS, SHEET_TO_WINDOW_Y, windowHeight } from "./geometry";
 import { drawNinepatch } from "./ninepatch";
 import {
   drawInset,
@@ -248,12 +248,16 @@ export function renderSheet(project: Project, background?: Raster, context: Rend
 
   if (project.bakeWindow) {
     // The window itself — carved holes included — becomes sheet pixels, exactly what a
-    // real NEXT screen paints over the erased generic_54 texture.
+    // real NEXT screen paints over the erased generic_54 texture. A window pushed past
+    // the canvas (ascent below 13, or a tall window shifted far down) is rebuilt
+    // shorter with its contour re-closed, never sliced raw at the sheet edge.
     const window = renderWindow({
       rows: project.rows,
       hiddenContainerSlots: new Set(project.hiddenSlots ?? []),
       hiddenInvSlots: new Set(project.hiddenInvSlots ?? []),
       holes: new Set(project.holes ?? []),
+      cropTop: Math.max(0, -dy),
+      cropBottom: Math.max(0, windowHeight(project.rows) + dy - SHEET_CANVAS),
     });
     blit(sheet, window, 0, dy);
   }
