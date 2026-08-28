@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { parseComponent, serializeComponent, type LibraryComponent } from "../engine/components";
+import { cropToOpaque } from "../engine/ninepatch";
 import { parseFont, type ParsedBitmap, type ParsedFont } from "../engine/fontJson";
 import { decodePng } from "../engine/png";
 import { loadBitmapFont, type BitmapFont } from "../engine/textFont";
@@ -26,6 +27,9 @@ export interface Profile {
     guiFont: string;
     /** Candidate pack categories, tried in order when resolving a texture. */
     textureRoots: string[];
+    /** The project's real infobox art (repo-relative); rendered as a ninepatch. */
+    infoboxSkin?: string;
+    infoboxSkinBorder?: number;
   };
   codepointRanges?: { module: string; range: [string, string] }[];
 }
@@ -183,6 +187,25 @@ export async function loadGameFont(backend: FsBackend, pack: LoadedPack): Promis
     }
   }
   return null;
+}
+
+/**
+ * The profile's own infobox texture, cropped to its opaque box — so the editor's
+ * infobox is the artist's infobox, not an imitation of it.
+ */
+export async function loadInfoboxSkin(
+  backend: FsBackend,
+  pack: LoadedPack,
+): Promise<{ raster: Raster; border: number } | null> {
+  const path = pack.profile.paths.infoboxSkin;
+  if (!path) return null;
+  try {
+    const raster = cropToOpaque(decodePng(await backend.read(joinPath(pack.root, path))));
+    return { raster, border: pack.profile.paths.infoboxSkinBorder ?? 4 };
+  } catch (error) {
+    console.warn("infobox skin failed to load:", error);
+    return null;
+  }
 }
 
 const COMPONENTS_DIR = "tools/slotify/components";

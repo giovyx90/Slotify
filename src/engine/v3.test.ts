@@ -143,7 +143,7 @@ describe("rendering the new element kinds", () => {
   it("draws coloured buttons with a centred label", () => {
     const project = newProject("m", "k", "U+E8F0");
     project.elements.push({ id: "b", kind: "button", x: 20, y: 30, w: 40, h: 18, color: "#204060", label: "AB", textColor: "#FFFFFF" });
-    const sheet = renderSheet(project, undefined, { font });
+    const sheet = renderSheet(project, undefined, { fonts: { minecraft: font } });
     expect(rgbAt(sheet, 30, 40)).toEqual([32, 64, 96]); // custom fill (window==sheet at ascent 13)
     // The label: A's mark row 2 within the 8px line, centred in the 18px button.
     const labelY = 30 + Math.floor((18 - 8) / 2) + 2;
@@ -151,12 +151,15 @@ describe("rendering the new element kinds", () => {
     expect(rgbAt(sheet, labelX, labelY)).toEqual([255, 255, 255]);
   });
 
-  it("draws an infobox with border and lines, and a placeholder for a missing sprite", () => {
+  it("draws the fallback infobox (black ring, inner border) and a placeholder for a missing sprite", () => {
     const project = newProject("m", "k", "U+E8F0");
     project.elements.push({ id: "i", kind: "infobox", x: 10, y: 60, w: 80, h: 30, lines: ["A"], borderColor: "#F0A831" });
     project.elements.push({ id: "s", kind: "sprite", x: 120, y: 60, w: 10, h: 10, sprite: "missing" });
-    const sheet = renderSheet(project, undefined, { font });
-    expect(rgbAt(sheet, 10, 60)).toEqual(hexToRgb("#F0A831"));
+    const sheet = renderSheet(project, undefined, { fonts: { minecraft: font } });
+    expect(alphaAt(sheet, 10, 60)).toBe(0); // rounded corner stays open
+    expect(rgbAt(sheet, 11, 60)).toEqual([0, 0, 0]); // outer black ring
+    expect(rgbAt(sheet, 11, 61)).toEqual(hexToRgb("#F0A831")); // inner border
+    expect(rgbAt(sheet, 14, 64)).toEqual(hexToRgb("#212121")); // measured NEXT fill
     expect(rgbAt(sheet, 120, 60)).toEqual([255, 90, 90]); // missing-sprite outline
   });
 

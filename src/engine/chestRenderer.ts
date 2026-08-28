@@ -38,6 +38,10 @@ export interface RenderOptions {
   rows: number;
   /** Hide the player inventory / hotbar wells, as `PaintedInventoryHook` does. */
   hideViewerInventory?: boolean;
+  /** Individual container slots (raw index) removed from the drawn grid. */
+  hiddenContainerSlots?: ReadonlySet<number>;
+  /** Individual viewer-inventory slots removed: 0–26 main, 27–35 hotbar. */
+  hiddenInvSlots?: ReadonlySet<number>;
 }
 
 /** The bare window, top-left anchored, on a canvas exactly `WINDOW_W × windowHeight`. */
@@ -64,18 +68,23 @@ export function renderWindow(options: RenderOptions): Raster {
   }
 
   for (let index = 0; index < COLS * options.rows; index++) {
-    drawSlotWell(raster,GRID_X + (index % COLS) * CELL, GRID_Y + Math.floor(index / COLS) * CELL);
+    if (options.hiddenContainerSlots?.has(index)) continue;
+    drawSlotWell(raster, GRID_X + (index % COLS) * CELL, GRID_Y + Math.floor(index / COLS) * CELL);
   }
 
   if (!options.hideViewerInventory) {
     const invY = playerInvY(options.rows);
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < COLS; col++) {
-        drawSlotWell(raster,GRID_X + col * CELL, invY + row * CELL);
+        if (options.hiddenInvSlots?.has(row * COLS + col)) continue;
+        drawSlotWell(raster, GRID_X + col * CELL, invY + row * CELL);
       }
     }
     const hbY = hotbarY(options.rows);
-    for (let col = 0; col < COLS; col++) drawSlotWell(raster, GRID_X + col * CELL, hbY);
+    for (let col = 0; col < COLS; col++) {
+      if (options.hiddenInvSlots?.has(27 + col)) continue;
+      drawSlotWell(raster, GRID_X + col * CELL, hbY);
+    }
   }
 
   return raster;

@@ -5,6 +5,7 @@
   import { detectCells, type Raster } from "../engine/raster";
   import { describeCollision, nextFree } from "../engine/registry";
   import { formatCodepoint } from "../engine/unicode";
+  import { buildMono5Font } from "../engine/mono5";
   import type { BitmapFont } from "../engine/textFont";
   import { detectBackend, joinPath } from "../platform/fs";
   import Editor from "./Editor.svelte";
@@ -13,6 +14,7 @@
   import {
     decodeTexture,
     loadGameFont,
+    loadInfoboxSkin,
     loadPack,
     measureSheet,
     resolveTexture,
@@ -45,6 +47,9 @@
   let editorBackground: Raster | undefined = $state(undefined);
   let savedProjects: string[] = $state([]);
   let gameFont: BitmapFont | null = $state(null);
+  let infoboxSkin: { raster: Raster; border: number } | undefined = $state(undefined);
+  const mono5 = buildMono5Font();
+  const fonts = $derived({ minecraft: gameFont ?? undefined, mono5 });
 
   const folders = $derived.by(() => {
     if (!pack) return [] as { folder: string; screens: ScreenEntry[] }[];
@@ -73,6 +78,7 @@
         status = "";
         void refreshProjects();
         gameFont = await loadGameFont(backend, pack);
+        infoboxSkin = (await loadInfoboxSkin(backend, pack)) ?? undefined;
       } catch (error) {
         status = `Failed to open pack: ${error}`;
       }
@@ -200,15 +206,16 @@
     {backend}
     packRoot={pack.root}
     fontPath={pack.profile.paths.fontDir + "/gui.json"}
-    font={gameFont}
+    {fonts}
+    {infoboxSkin}
     onExit={() => {
       mode = "viewer";
       void refreshProjects();
     }}
   />
-{:else if mode === "tag" && pack && gameFont}
+{:else if mode === "tag" && pack}
   <TagTool
-    font={gameFont}
+    {fonts}
     {backend}
     packRoot={pack.root}
     onExit={() => (mode = "viewer")}
@@ -225,9 +232,7 @@
       <p class="meta">{pack.fonts.length} fonts · {pack.registry.glyphs.size} glyphs · {pack.screens.length} sheets</p>
 
       <button class="primary" onclick={newScreen}>+ New screen</button>
-      {#if gameFont}
-        <button class="primary" onclick={() => (mode = "tag")}>Aa Tag generator</button>
-      {/if}
+      <button class="primary" onclick={() => (mode = "tag")}>Aa Tag generator</button>
 
       {#if savedProjects.length > 0}
         <details class="projects" open>

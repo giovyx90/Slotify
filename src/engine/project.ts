@@ -12,9 +12,26 @@ import { z } from "zod";
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
+export const ShadowDirSchema = z.enum([
+  "none",
+  "below-right",
+  "below",
+  "right",
+  "below-left",
+  "left",
+  "above",
+  "above-right",
+  "above-left",
+]);
+
+export const FontChoiceSchema = z.enum(["minecraft", "mono5"]);
+
+/** A cell of the 18px tile lattice (borders shared with the slot grid, origin (7,17)). */
+export const TileCellSchema = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
+
 export const ElementSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["slot", "button", "panel", "well", "text", "infobox", "sprite"]),
+  kind: z.enum(["slot", "button", "panel", "well", "text", "infobox", "sprite", "tiles"]),
   /** Window coordinates, pixels. For `slot`, the 16×16 well interior's top-left. */
   x: z.number().int(),
   y: z.number().int(),
@@ -22,17 +39,27 @@ export const ElementSchema = z.object({
   h: z.number().int().positive(),
   /** Buttons only: drawn pressed-in instead of raised. */
   pressed: z.boolean().optional(),
-  /** Fill tint for button/panel/well, background for infobox. */
+  /** Fill tint for button/panel/well/tiles, background override for infobox. */
   color: z.string().regex(HEX).optional(),
-  /** Button/text label. One line, game font. */
+  /** Button/text/tile-button label. One line. */
   label: z.string().optional(),
   textColor: z.string().regex(HEX).optional(),
   /** Infobox body, one string per line. */
   lines: z.array(z.string()).optional(),
-  /** Infobox border. */
+  /** Per-line colours, aligned with `lines`; null falls back to textColor. */
+  lineColors: z.array(z.string().regex(HEX).nullable()).optional(),
+  /** Infobox border override (procedural fallback only — the skin wins when loaded). */
   borderColor: z.string().regex(HEX).optional(),
   /** Sprite elements: id of the library component whose PNG this draws. */
   sprite: z.string().optional(),
+  /** Text shadow for label/text/infobox lines. Default none. */
+  shadow: ShadowDirSchema.optional(),
+  /** Which face renders the text. Default minecraft (the pack font). */
+  font: FontChoiceSchema.optional(),
+  /** `tiles` only: what the connected region reads as. */
+  tileKind: z.enum(["button", "infobox"]).optional(),
+  /** `tiles` only: the lattice cells this region occupies. Adjacent cells merge. */
+  cells: z.array(TileCellSchema).optional(),
 });
 
 export const HotspotSchema = z.object({
@@ -59,6 +86,10 @@ export const ProjectSchema = z.object({
   background: z.object({ textureFile: z.string().min(1) }).optional(),
   elements: z.array(ElementSchema),
   hotspots: z.array(HotspotSchema),
+  /** Container slots (raw index) removed from the drawn grid. */
+  hiddenSlots: z.array(z.number().int().nonnegative()).optional(),
+  /** Viewer-inventory slots removed: 0–26 main inventory, 27–35 hotbar. */
+  hiddenInvSlots: z.array(z.number().int().nonnegative()).optional(),
 });
 
 export type Element = z.infer<typeof ElementSchema>;

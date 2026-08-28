@@ -6,6 +6,7 @@ import { advanceTable, glyphsJava, glyphsTestJava, layoutJava, scaffoldFiles } f
 import { decodePng } from "./png";
 import { newProject, parseProject, serializeProject } from "./project";
 import { alphaAt, impliedAscent } from "./raster";
+// (bake context in these tests carries no fonts — labels are not under test here)
 import { bakeSheet, renderSheet } from "./renderProject";
 import { decodePacket, encodePacket, RCON_AUTH } from "./rcon";
 import { visualsYmlBlock, configYmlBlock } from "./visualsYml";

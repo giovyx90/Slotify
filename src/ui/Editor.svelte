@@ -8,15 +8,16 @@
     type LibraryComponent,
   } from "../engine/components";
   import { buildDeployPlan } from "../engine/deploy";
-  import { CELL, COLS, GRID_X, GRID_Y, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
+  import { CELL, COLS, GRID_X, GRID_Y, hotbarY, playerInvY, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
   import { scaffoldFiles, advanceTable, type ScaffoldInput } from "../engine/javaScaffold";
   import { encodePng } from "../engine/png";
   import { serializeProject, type Element, type Project } from "../engine/project";
   import type { Raster } from "../engine/raster";
-  import { bakeSheet } from "../engine/renderProject";
+  import { bakeSheet, type RenderContext } from "../engine/renderProject";
   import { snapToEdges } from "../engine/snap";
   import { spliceProviders } from "../engine/spliceGuiJson";
-  import { measureText, type BitmapFont } from "../engine/textFont";
+  import { measureText, type BitmapFont, type ShadowDir } from "../engine/textFont";
+  import { cellAt, type TileCell } from "../engine/tiles";
   import { parseCodepoint } from "../engine/unicode";
   import { visualsYmlBlock, configYmlBlock } from "../engine/visualsYml";
   import { joinPath, type FsBackend } from "../platform/fs";
@@ -28,6 +29,9 @@
     header: "#E8B23A", stat: "#568FD6", list: "#6AB060", action: "#D6783C",
     chart: "#966EBE", info: "#5FB4B4", empty: "#C85A5A", nav: "#78788C",
   };
+  const SHADOW_DIRS: ShadowDir[] = [
+    "none", "below-right", "below", "right", "below-left", "left", "above", "above-right", "above-left",
+  ];
 
   let {
     project = $bindable(),
@@ -35,7 +39,8 @@
     backend,
     packRoot,
     fontPath,
-    font,
+    fonts,
+    infoboxSkin,
     onExit,
   }: {
     project: Project;
@@ -43,11 +48,12 @@
     backend: FsBackend;
     packRoot: string;
     fontPath: string;
-    font: BitmapFont | null;
+    fonts: { minecraft?: BitmapFont; mono5?: BitmapFont };
+    infoboxSkin?: { raster: Raster; border: number };
     onExit: () => void;
   } = $props();
 
-  type Tool = "select" | "slot" | "button" | "panel" | "well" | "text" | "infobox" | "hotspot";
+  type Tool = "select" | "button" | "infobox" | "slot" | "erase" | "text" | "panel" | "well" | "hotspot";
   let tool: Tool = $state("select");
   let selectedId: string | null = $state(null);
   let checked = $state(new Set<string>());
@@ -60,26 +66,30 @@
   let nextIdCounter = $state(1);
   let drag: { id: string; startX: number; startY: number; elX: number; elY: number } | null = null;
 
-  // NXMenu-style library
   let library: LibraryComponent[] = $state([]);
   let pendingComponent: LibraryComponent | null = $state(null);
   let spriteRasters = $state(new Map<string, Raster>());
   let componentName = $state("");
   let fileInput: HTMLInputElement | undefined = $state();
 
-  // v2 deploy panel
   let deployPath = $state("");
   let rconHost = $state("");
   let rconPort = $state(25575);
   let rconPassword = $state("");
 
-  const baked = $derived(
-    bakeSheet(project, background, { font: font ?? undefined, sprites: spriteRasters }),
-  );
+  const context = $derived<RenderContext>({ fonts, sprites: spriteRasters, infoboxSkin });
+  const baked = $derived(bakeSheet(project, background, context));
   const selected = $derived(project.elements.find((element) => element.id === selectedId) ?? null);
+  const hasText = $derived(
+    selected != null && ["button", "text", "infobox", "tiles"].includes(selected.kind),
+  );
 
   function nextId(): string {
     return `e${nextIdCounter++}`;
+  }
+
+  function touch(): void {
+    project = { ...project };
   }
 
   async function refreshLibrary(): Promise<void> {
@@ -102,7 +112,6 @@
   $effect(() => {
     void refreshLibrary();
     void ensureSprites(project.elements);
-    // Seed the id counter above anything already in the project.
     const used = project.elements
       .map((element) => Number(/^e(\d+)$/.exec(element.id)?.[1] ?? 0))
       .reduce((a, b) => Math.max(a, b), 0);
@@ -121,6 +130,8 @@
         texture: baked.sheet,
       },
       pad: PAD,
+      hiddenContainerSlots: new Set(project.hiddenSlots ?? []),
+      hiddenInvSlots: new Set(project.hiddenInvSlots ?? []),
     });
 
     const offscreen = document.createElement("canvas");
@@ -132,22 +143,22 @@
 
     canvas.width = raster.width * zoom;
     canvas.height = raster.height * zoom;
-    const context = canvas.getContext("2d")!;
-    context.imageSmoothingEnabled = false;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-    drawOverlays(context);
+    const target = canvas.getContext("2d")!;
+    target.imageSmoothingEnabled = false;
+    target.clearRect(0, 0, canvas.width, canvas.height);
+    target.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+    drawOverlays(target);
   });
 
-  function drawOverlays(context: CanvasRenderingContext2D): void {
+  function drawOverlays(target: CanvasRenderingContext2D): void {
     const stroke = (x: number, y: number, w: number, h: number, colour: string, width = 1) => {
-      context.strokeStyle = colour;
-      context.lineWidth = width;
-      context.strokeRect((PAD + x) * zoom + 0.5, (PAD + y) * zoom + 0.5, w * zoom - 1, h * zoom - 1);
+      target.strokeStyle = colour;
+      target.lineWidth = width;
+      target.strokeRect((PAD + x) * zoom + 0.5, (PAD + y) * zoom + 0.5, w * zoom - 1, h * zoom - 1);
     };
     const fill = (x: number, y: number, w: number, h: number, colour: string) => {
-      context.fillStyle = colour;
-      context.fillRect((PAD + x) * zoom, (PAD + y) * zoom, w * zoom, h * zoom);
+      target.fillStyle = colour;
+      target.fillRect((PAD + x) * zoom, (PAD + y) * zoom, w * zoom, h * zoom);
     };
 
     if (guides) {
@@ -166,6 +177,13 @@
         const rect = slotWindowRect(Math.floor(slot / COLS), slot % COLS);
         fill(rect.x, rect.y, rect.w, rect.h, colour + (hotspot.id === activeHotspot ? "66" : "38"));
         stroke(rect.x, rect.y, rect.w, rect.h, colour);
+      }
+    }
+
+    if (tool === "erase") {
+      for (const slot of project.hiddenSlots ?? []) {
+        const rect = slotWindowRect(Math.floor(slot / COLS), slot % COLS);
+        fill(rect.x, rect.y, rect.w, rect.h, "rgba(200,90,90,0.3)");
       }
     }
 
@@ -203,6 +221,92 @@
     return null;
   }
 
+  function refreshTileBox(element: Element): void {
+    const cells = (element.cells ?? []) as TileCell[];
+    if (cells.length === 0) return;
+    const rows = cells.map(([row]) => row);
+    const cols = cells.map(([, col]) => col);
+    element.x = 7 + 18 * Math.min(...cols);
+    element.y = 17 + 18 * Math.min(...rows);
+    element.w = 18 * (Math.max(...cols) - Math.min(...cols) + 1);
+    element.h = 18 * (Math.max(...rows) - Math.min(...rows) + 1);
+  }
+
+  /**
+   * The NXMenu gesture: tap a cell — a 1×1 piece appears; tap the cell next to it and
+   * the piece grows; tap a claimed cell and it shrinks back. A tap away from the
+   * current piece starts a new one.
+   */
+  function tapTile(point: { x: number; y: number }, tileKind: "button" | "infobox"): void {
+    const cell = cellAt(point.x, point.y);
+    if (!cell) return;
+    const [row, col] = cell;
+
+    const current =
+      selected && selected.kind === "tiles" && selected.tileKind === tileKind ? selected : null;
+    const cells = (current?.cells ?? []) as TileCell[];
+    const inRegion = cells.some(([r, c]) => r === row && c === col);
+    const adjacent = cells.some(([r, c]) => Math.abs(r - row) + Math.abs(c - col) === 1);
+
+    if (current && inRegion) {
+      current.cells = cells.filter(([r, c]) => !(r === row && c === col));
+      if (current.cells.length === 0) {
+        project = { ...project, elements: project.elements.filter((element) => element.id !== current.id) };
+        selectedId = null;
+        return;
+      }
+      refreshTileBox(current);
+      touch();
+      return;
+    }
+
+    if (current && adjacent) {
+      current.cells = [...cells, cell];
+      refreshTileBox(current);
+      touch();
+      return;
+    }
+
+    const element: Element = {
+      id: nextId(),
+      kind: "tiles",
+      tileKind,
+      cells: [cell],
+      x: 7 + 18 * col,
+      y: 17 + 18 * row,
+      w: 18,
+      h: 18,
+      ...(tileKind === "infobox" ? { lines: ["Info line"], font: "minecraft" as const } : { label: "" }),
+    };
+    project = { ...project, elements: [...project.elements, element] };
+    selectedId = element.id;
+  }
+
+  /** Tap a slot to remove it (and tap again to bring it back) — container or inventory. */
+  function tapErase(point: { x: number; y: number }): void {
+    const col = Math.floor((point.x - GRID_X) / CELL);
+    if (col < 0 || col >= COLS) return;
+
+    const containerRow = Math.floor((point.y - GRID_Y) / CELL);
+    if (containerRow >= 0 && containerRow < project.rows) {
+      const index = slotIndex(containerRow, col);
+      const hidden = new Set(project.hiddenSlots ?? []);
+      if (hidden.has(index)) hidden.delete(index);
+      else hidden.add(index);
+      project = { ...project, hiddenSlots: [...hidden].sort((a, b) => a - b) };
+      return;
+    }
+
+    const invRow = Math.floor((point.y - playerInvY(project.rows)) / CELL);
+    const isHotbar = Math.floor((point.y - hotbarY(project.rows)) / CELL) === 0;
+    const invIndex = isHotbar ? 27 + col : invRow >= 0 && invRow < 3 ? invRow * COLS + col : null;
+    if (invIndex === null) return;
+    const hidden = new Set(project.hiddenInvSlots ?? []);
+    if (hidden.has(invIndex)) hidden.delete(invIndex);
+    else hidden.add(invIndex);
+    project = { ...project, hiddenInvSlots: [...hidden].sort((a, b) => a - b) };
+  }
+
   function onPointerDown(event: PointerEvent): void {
     const point = windowPoint(event);
 
@@ -221,6 +325,16 @@
       return;
     }
 
+    if (tool === "button" || tool === "infobox") {
+      tapTile(point, tool);
+      return;
+    }
+
+    if (tool === "erase") {
+      tapErase(point);
+      return;
+    }
+
     if (tool === "hotspot") {
       const col = Math.floor((point.x - GRID_X) / CELL);
       const row = Math.floor((point.y - GRID_Y) / CELL);
@@ -231,27 +345,21 @@
       hotspot.slots = hotspot.slots.includes(index)
         ? hotspot.slots.filter((slot) => slot !== index)
         : [...hotspot.slots, index].sort((a, b) => a - b);
-      project = { ...project };
+      touch();
       return;
     }
 
     if (tool !== "select") {
       const defaults: Record<string, Partial<Element> & { w: number; h: number }> = {
         slot: { w: 16, h: 16 },
-        button: { w: 40, h: 18, label: "" },
         panel: { w: 80, h: 40 },
         well: { w: 18, h: 18 },
-        text: { w: 40, h: 8, label: "Text", textColor: "#FFFFFF" },
-        infobox: { w: 100, h: 34, lines: ["Info line"], borderColor: "#F0A831" },
+        text: { w: 40, h: 8, label: "Text", textColor: "#FFFFFF", shadow: "below-right" },
       };
       const base = defaults[tool]!;
       const at = tool === "slot" ? snapSlot(point.x, point.y) : { x: point.x - (base.w >> 1), y: point.y - (base.h >> 1) };
       const element: Element = { id: nextId(), kind: tool as Element["kind"], x: at.x, y: at.y, ...base } as Element;
-      if (element.kind === "text" && font && element.label) {
-        const size = measureText(font, element.label);
-        element.w = Math.max(1, size.w);
-        element.h = size.h;
-      }
+      if (element.kind === "text") retextSize(element);
       project = { ...project, elements: [...project.elements, element] };
       selectedId = element.id;
       tool = "select";
@@ -260,7 +368,7 @@
 
     const hit = hitElement(point.x, point.y);
     selectedId = hit?.id ?? null;
-    if (hit) {
+    if (hit && hit.kind !== "tiles") {
       drag = { id: hit.id, startX: point.x, startY: point.y, elX: hit.x, elY: hit.y };
       (event.target as HTMLElement).setPointerCapture(event.pointerId);
     }
@@ -277,7 +385,6 @@
     if (element.kind === "slot") {
       ({ x, y } = snapSlot(x + 8, y + 8));
     } else {
-      // Edge snapping against every other element — how pieces connect.
       const others = project.elements
         .filter((candidate) => candidate.id !== element.id)
         .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
@@ -286,7 +393,7 @@
 
     element.x = x;
     element.y = y;
-    project = { ...project };
+    touch();
   }
 
   function onPointerUp(): void {
@@ -294,10 +401,10 @@
   }
 
   function nudge(dx: number, dy: number): void {
-    if (!selected) return;
+    if (!selected || selected.kind === "tiles") return;
     selected.x += dx;
     selected.y += dy;
-    project = { ...project };
+    touch();
   }
 
   function removeSelected(): void {
@@ -306,17 +413,13 @@
     selectedId = null;
   }
 
-  function touch(): void {
-    project = { ...project };
-  }
-
-  function retextMeasure(): void {
-    if (selected?.kind === "text" && font && selected.label) {
-      const size = measureText(font, selected.label);
-      selected.w = Math.max(1, size.w);
-      selected.h = size.h;
+  function retextSize(element: Element): void {
+    const font = element.font === "mono5" ? fonts.mono5 : fonts.minecraft ?? fonts.mono5;
+    if (element.kind === "text" && font && element.label) {
+      const size = measureText(font, element.label);
+      element.w = Math.max(1, size.w);
+      element.h = size.h;
     }
-    touch();
   }
 
   function toggleChecked(id: string): void {
@@ -324,6 +427,36 @@
     if (next.has(id)) next.delete(id);
     else next.add(id);
     checked = next;
+  }
+
+  function setLine(index: number, text: string): void {
+    if (!selected) return;
+    const lines = [...(selected.lines ?? [])];
+    lines[index] = text;
+    selected.lines = lines;
+    touch();
+  }
+
+  function setLineColor(index: number, colour: string): void {
+    if (!selected) return;
+    const colours = [...(selected.lineColors ?? [])];
+    while (colours.length < (selected.lines ?? []).length) colours.push(null);
+    colours[index] = colour;
+    selected.lineColors = colours;
+    touch();
+  }
+
+  function addLine(): void {
+    if (!selected) return;
+    selected.lines = [...(selected.lines ?? []), ""];
+    touch();
+  }
+
+  function removeLine(index: number): void {
+    if (!selected) return;
+    selected.lines = (selected.lines ?? []).filter((_, i) => i !== index);
+    selected.lineColors = (selected.lineColors ?? []).filter((_, i) => i !== index);
+    touch();
   }
 
   async function saveSelectionAsComponent(): Promise<void> {
@@ -458,9 +591,9 @@
     <button class="back" onclick={onExit}>← viewer</button>
     <h2>{project.module}/{project.screenKey}</h2>
 
-    <h3>Place</h3>
+    <h3>Tools <span class="hint">button/infobox grow tile by tile</span></h3>
     <div class="palette">
-      {#each ["select", "slot", "button", "panel", "well", "text", "infobox", "hotspot"] as candidate}
+      {#each ["select", "button", "infobox", "slot", "erase", "text", "panel", "well", "hotspot"] as candidate}
         <button class:active={tool === candidate && !pendingComponent} onclick={() => { tool = candidate as Tool; pendingComponent = null; }}>{candidate}</button>
       {/each}
     </div>
@@ -491,12 +624,12 @@
         <li class="layer-row">
           <input type="checkbox" checked={checked.has(element.id)} onchange={() => toggleChecked(element.id)} />
           <button class:active={selectedId === element.id} onclick={() => (selectedId = element.id)}>
-            {element.kind}{element.label ? ` “${element.label}”` : ""} @ {element.x},{element.y}
+            {element.kind === "tiles" ? `${element.tileKind} ×${element.cells?.length ?? 0}` : element.kind}{element.label ? ` “${element.label}”` : ""} @ {element.x},{element.y}
           </button>
         </li>
       {/each}
       {#if project.elements.length === 0}
-        <li class="hint">Pick a component above, then tap the canvas.</li>
+        <li class="hint">Pick button or infobox, then tap the grid — each tap grows the piece.</li>
       {/if}
     </ul>
 
@@ -528,49 +661,76 @@
 
   <aside class="panel">
     {#if selected}
-      <h3>Selected: {selected.kind}</h3>
-      <div class="grid2">
-        <label>x <input type="number" bind:value={selected.x} onchange={touch} /></label>
-        <label>y <input type="number" bind:value={selected.y} onchange={touch} /></label>
-        <label>w <input type="number" min="2" bind:value={selected.w} onchange={touch} /></label>
-        <label>h <input type="number" min="2" bind:value={selected.h} onchange={touch} /></label>
-      </div>
-
-      {#if selected.kind === "button" || selected.kind === "text"}
-        <label class="row">label <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextMeasure(); }} /></label>
+      <h3>Selected: {selected.kind === "tiles" ? `${selected.tileKind} tiles` : selected.kind}</h3>
+      {#if selected.kind !== "tiles"}
+        <div class="grid2">
+          <label>x <input type="number" bind:value={selected.x} onchange={touch} /></label>
+          <label>y <input type="number" bind:value={selected.y} onchange={touch} /></label>
+          <label>w <input type="number" min="2" bind:value={selected.w} onchange={touch} /></label>
+          <label>h <input type="number" min="2" bind:value={selected.h} onchange={touch} /></label>
+        </div>
+      {:else}
+        <p class="hint">Tap cells with the {selected.tileKind} tool to grow or shrink this piece.</p>
       {/if}
-      {#if selected.kind === "infobox"}
-        <label class="row">lines
-          <textarea
-            rows="3"
-            value={(selected.lines ?? []).join("\n")}
-            oninput={(event) => { selected!.lines = (event.target as HTMLTextAreaElement).value.split("\n"); touch(); }}
-          ></textarea>
-        </label>
+
+      {#if selected.kind === "button" || selected.kind === "text" || (selected.kind === "tiles" && selected.tileKind === "button")}
+        <label class="row">label <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextSize(selected!); touch(); }} /></label>
+      {/if}
+
+      {#if selected.kind === "infobox" || (selected.kind === "tiles" && selected.tileKind === "infobox")}
+        <h3>Lines <span class="hint">each with its own colour</span></h3>
+        {#each selected.lines ?? [] as line, index}
+          <div class="line-row">
+            <input value={line} oninput={(event) => setLine(index, (event.target as HTMLInputElement).value)} />
+            <input
+              type="color"
+              value={selected.lineColors?.[index] ?? selected.textColor ?? "#E6E2DA"}
+              oninput={(event) => setLineColor(index, (event.target as HTMLInputElement).value.toUpperCase())}
+            />
+            <button class="mini danger" onclick={() => removeLine(index)}>×</button>
+          </div>
+        {/each}
+        <button onclick={addLine}>+ line</button>
+      {/if}
+
+      {#if hasText}
+        <div class="grid2" style="margin-top:0.4rem">
+          <label>font
+            <select value={selected.font ?? "minecraft"} onchange={(event) => { selected!.font = (event.target as HTMLSelectElement).value as "minecraft" | "mono5"; retextSize(selected!); touch(); }}>
+              <option value="minecraft">minecraft</option>
+              <option value="mono5">mono 5×5</option>
+            </select>
+          </label>
+          <label>shadow
+            <select value={selected.shadow ?? "none"} onchange={(event) => { selected!.shadow = (event.target as HTMLSelectElement).value as ShadowDir; touch(); }}>
+              {#each SHADOW_DIRS as dir}<option value={dir}>{dir}</option>{/each}
+            </select>
+          </label>
+        </div>
       {/if}
 
       <div class="grid2 colors">
-        {#if selected.kind !== "text" && selected.kind !== "sprite" && selected.kind !== "slot"}
+        {#if !["text", "sprite", "slot"].includes(selected.kind) && !(selected.kind === "tiles" && selected.tileKind === "infobox") && selected.kind !== "infobox"}
           <label>fill <input type="color" value={selected.color ?? "#C6C6C6"} oninput={(event) => { selected!.color = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
         {/if}
-        {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "infobox"}
+        {#if hasText}
           <label>text <input type="color" value={selected.textColor ?? "#FFFFFF"} oninput={(event) => { selected!.textColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
-        {/if}
-        {#if selected.kind === "infobox"}
-          <label>border <input type="color" value={selected.borderColor ?? "#F0A831"} oninput={(event) => { selected!.borderColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
         {/if}
       </div>
 
-      {#if selected.kind === "button"}
+      {#if selected.kind === "button" || (selected.kind === "tiles" && selected.tileKind === "button")}
         <label class="row"><input type="checkbox" bind:checked={selected.pressed} onchange={touch} /> pressed</label>
       {/if}
+
       <div class="nudge">
-        <button onclick={() => nudge(0, -1)} aria-label="up">▲</button>
-        <div>
-          <button onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
-          <button onclick={() => nudge(1, 0)} aria-label="right">▶</button>
-        </div>
-        <button onclick={() => nudge(0, 1)} aria-label="down">▼</button>
+        {#if selected.kind !== "tiles"}
+          <button onclick={() => nudge(0, -1)} aria-label="up">▲</button>
+          <div>
+            <button onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
+            <button onclick={() => nudge(1, 0)} aria-label="right">▶</button>
+          </div>
+          <button onclick={() => nudge(0, 1)} aria-label="down">▼</button>
+        {/if}
         <button class="danger" onclick={removeSelected}>delete</button>
       </div>
     {/if}
@@ -585,11 +745,16 @@
     <label class="row">codepoint <input bind:value={project.codepoint} /></label>
     <label class="row">fallback <input bind:value={project.fallbackTitle} /></label>
     <label class="row"><input type="checkbox" bind:checked={guides} /> guides</label>
+    <p class="hint">
+      erase tool: tap any slot — container or inventory — to remove it; tap again to restore.
+      Hidden: {project.hiddenSlots?.length ?? 0} container, {project.hiddenInvSlots?.length ?? 0} inventory.
+    </p>
 
     <h3>Measured</h3>
     <p class="measure">
       advance <b>{baked.advance}</b> · strays stripped <b class={baked.straysRemoved ? "warn" : ""}>{baked.straysRemoved}</b>
-      {#if !font}<br /><span class="warn">game font not loaded — labels won't render</span>{/if}
+      {#if !fonts.minecraft}<br /><span class="warn">pack font not loaded — minecraft face falls back to mono</span>{/if}
+      {#if !infoboxSkin}<br /><span class="warn">no infobox skin in profile — using the procedural stand-in</span>{/if}
     </p>
 
     <h3>Export</h3>
@@ -666,6 +831,7 @@
   }
   .palette button.active, .layers button.active { background: #3b2a1a; color: #ffc65c; border-color: #7a5220; }
   .danger { border-color: #7a2a20; color: #ff9c8b; }
+  .mini { min-height: 30px; padding: 0.2rem 0.5rem; }
 
   .layers { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
   .layers button { width: 100%; text-align: left; }
@@ -680,6 +846,9 @@
   .row2 { display: flex; gap: 0.3rem; margin: 0.3rem 0; }
   .row2 input { flex: 1; }
 
+  .line-row { display: flex; gap: 0.25rem; margin-bottom: 0.25rem; align-items: center; }
+  .line-row input[type="color"] { width: 38px; flex: none; }
+
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; }
   .colors { margin-top: 0.4rem; }
   label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
@@ -690,7 +859,7 @@
   }
   input[type="checkbox"] { width: auto; }
   input[type="color"] { padding: 0.1rem; height: 30px; }
-  select { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; }
+  select { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; min-width: 0; }
 
   .nudge { display: grid; justify-items: center; gap: 0.25rem; margin-top: 0.4rem; }
   .nudge div { display: flex; gap: 1.6rem; }

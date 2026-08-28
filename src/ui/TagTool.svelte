@@ -3,21 +3,28 @@
   import { encodePng } from "../engine/png";
   import { renderTag, type TagStyle } from "../engine/tagGenerator";
   import { slugify } from "../engine/components";
-  import type { BitmapFont } from "../engine/textFont";
+  import { SHADOW_OFFSETS, type BitmapFont, type ShadowDir } from "../engine/textFont";
   import type { FsBackend } from "../platform/fs";
   import { saveComponent } from "./model";
 
   let {
-    font,
+    fonts,
     backend,
     packRoot,
     onExit,
   }: {
-    font: BitmapFont;
+    fonts: { minecraft?: BitmapFont; mono5?: BitmapFont };
     backend: FsBackend;
     packRoot: string;
     onExit: () => void;
   } = $props();
+
+  // The 5×5 mono is the tag face by default; the pack's Minecraft font is the option.
+  let fontChoice: "mono5" | "minecraft" = $state("mono5");
+  const font = $derived(
+    (fontChoice === "minecraft" ? fonts.minecraft : fonts.mono5) ?? fonts.mono5 ?? fonts.minecraft!,
+  );
+  let shadowDir: ShadowDir = $state("below-right");
 
   let text = $state("NEXT");
   let scale = $state(1);
@@ -43,8 +50,8 @@
     fill,
     fillTo: useGradient ? fillTo : undefined,
     outline: useOutline ? outline : undefined,
-    shadow: useShadow ? shadow : undefined,
-    shadowOffset: [1, 1],
+    shadow: useShadow && shadowDir !== "none" ? shadow : undefined,
+    shadowOffset: shadowDir !== "none" ? SHADOW_OFFSETS[shadowDir] : [1, 1],
     letterSpacing,
     background: useBackground ? { fill: bgFill, border: bgBorder, paddingX: padding, paddingY: padding } : undefined,
   });
@@ -98,6 +105,12 @@
 
     <label class="row">text <input bind:value={text} /></label>
     <div class="grid2">
+      <label>font
+        <select bind:value={fontChoice}>
+          <option value="mono5">mono 5×5</option>
+          {#if fonts.minecraft}<option value="minecraft">minecraft</option>{/if}
+        </select>
+      </label>
       <label>scale <input type="number" min="1" max="8" bind:value={scale} /></label>
       <label>spacing <input type="number" min="-1" max="4" bind:value={letterSpacing} /></label>
     </div>
@@ -116,7 +129,14 @@
       <label class="gap"><input type="checkbox" bind:checked={useOutline} /> outline</label>
       {#if useOutline}<label><input type="color" bind:value={outline} /></label>{/if}
       <label class="gap"><input type="checkbox" bind:checked={useShadow} /> shadow</label>
-      {#if useShadow}<label><input type="color" bind:value={shadow} /></label>{/if}
+      {#if useShadow}
+        <label><input type="color" bind:value={shadow} /></label>
+        <label>dir
+          <select bind:value={shadowDir}>
+            {#each Object.keys(SHADOW_OFFSETS) as dir}<option value={dir}>{dir}</option>{/each}
+          </select>
+        </label>
+      {/if}
     </div>
 
     <h3>Background</h3>
@@ -188,6 +208,7 @@
   }
   input[type="checkbox"] { width: auto; }
   input[type="color"] { padding: 0.1rem; height: 30px; }
+  select { background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 4px; min-width: 0; }
 
   button {
     background: #26262d; color: inherit; border: 1px solid #33333b; border-radius: 6px;

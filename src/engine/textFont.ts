@@ -121,6 +121,65 @@ function rowColour(style: TextStyle, y: number, height: number): [number, number
   ) as [number, number, number];
 }
 
+export type ShadowDir =
+  | "none"
+  | "below-right"
+  | "below"
+  | "right"
+  | "below-left"
+  | "left"
+  | "above"
+  | "above-right"
+  | "above-left";
+
+export const SHADOW_OFFSETS: Record<Exclude<ShadowDir, "none">, [number, number]> = {
+  "below-right": [1, 1],
+  below: [0, 1],
+  right: [1, 0],
+  "below-left": [-1, 1],
+  left: [-1, 0],
+  above: [0, -1],
+  "above-right": [1, -1],
+  "above-left": [-1, -1],
+};
+
+/** The client's text-shadow colour: each channel quartered. */
+export function shadowOf(colour: [number, number, number]): [number, number, number] {
+  return [colour[0] >> 2, colour[1] >> 2, colour[2] >> 2];
+}
+
+/**
+ * A line with an optional drop shadow, vanilla-style: the same glyph run offset one
+ * pixel in the chosen direction, in the quartered colour, under the text.
+ */
+export function renderTextShadowed(
+  font: BitmapFont,
+  text: string,
+  style: TextStyle,
+  shadow: ShadowDir = "none",
+): Raster {
+  const body = renderText(font, text, style);
+  if (shadow === "none") return body;
+
+  const [dx, dy] = SHADOW_OFFSETS[shadow];
+  const out = makeRaster(body.width + Math.abs(dx), body.height + Math.abs(dy));
+  const dark = renderText(font, text, { ...style, color: shadowOf(style.color), gradientTo: style.gradientTo ? shadowOf(style.gradientTo) : undefined });
+
+  blitOnto(out, dark, Math.max(0, dx), Math.max(0, dy));
+  blitOnto(out, body, Math.max(0, -dx), Math.max(0, -dy));
+  return out;
+}
+
+function blitOnto(target: Raster, source: Raster, dx: number, dy: number): void {
+  for (let y = 0; y < source.height; y++) {
+    for (let x = 0; x < source.width; x++) {
+      const si = (y * source.width + x) * 4;
+      if (source.data[si + 3] === 0) continue;
+      target.data.set(source.data.subarray(si, si + 4), ((dy + y) * target.width + (dx + x)) * 4);
+    }
+  }
+}
+
 export function hexToRgb(hex: string): [number, number, number] {
   const clean = hex.replace("#", "");
   const value = parseInt(clean.length === 3 ? clean.replace(/./g, "$&$&") : clean, 16);
