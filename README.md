@@ -7,6 +7,8 @@
 **A design tool for Minecraft painted-GUI resource packs — pixel-perfect preview, glyph
 registry, one-click deploy.**
 
+*Guida completa in italiano: [GUIDA.md](GUIDA.md).*
+
 ## What is a painted GUI?
 
 A trick most large Minecraft servers rely on: a vanilla chest inventory whose **title**
