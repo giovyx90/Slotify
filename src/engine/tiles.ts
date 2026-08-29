@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Rect } from "./geometry";
-import { rect, type BevelSet, type RGBA } from "./paint";
+import { rect, type BevelSet, type PlateStyle, type RGBA } from "./paint";
 import { put } from "./paint";
 import type { Raster } from "./raster";
 
@@ -59,10 +59,13 @@ export function drawTileRegion(
   bevels: BevelSet,
   pressed: boolean,
   offsetY = 0,
+  style: PlateStyle = "single",
 ): void {
   const claimed = new Set(cells.map(([row, col]) => key(row, col)));
-  const top = pressed ? bevels.dark : bevels.light;
-  const bottom = pressed ? bevels.light : bevels.dark;
+  const top = style === "flat" ? bevels.edge : pressed ? bevels.dark : bevels.light;
+  const bottom = style === "flat" ? bevels.edge : pressed ? bevels.light : bevels.dark;
+  // A wide region wants a deeper edge; one pixel across four merged cells disappears.
+  const depth = style === "double" ? 2 : 1;
 
   for (const [row, col] of cells) {
     const cell = tileRect(row, col);
@@ -70,24 +73,43 @@ export function drawTileRegion(
   }
 
   // Dark (facing) edges first, light after — top-left dominance like a vanilla plate.
-  for (const [row, col] of cells) {
-    const cell = tileRect(row, col);
-    const y = cell.y + offsetY;
-    if (!claimed.has(key(row + 1, col))) {
-      for (let x = cell.x; x < cell.x + cell.w; x++) put(raster, x, y + cell.h - 1, bottom);
+  for (let ring = 0; ring < depth; ring++) {
+    for (const [row, col] of cells) {
+      const cell = tileRect(row, col);
+      const y = cell.y + offsetY;
+      if (!claimed.has(key(row + 1, col))) {
+        for (let x = cell.x; x < cell.x + cell.w; x++) put(raster, x, y + cell.h - 1 - ring, bottom);
+      }
+      if (!claimed.has(key(row, col + 1))) {
+        for (let dy = 0; dy < cell.h; dy++) put(raster, cell.x + cell.w - 1 - ring, y + dy, bottom);
+      }
     }
-    if (!claimed.has(key(row, col + 1))) {
-      for (let dy = 0; dy < cell.h; dy++) put(raster, cell.x + cell.w - 1, y + dy, bottom);
+    for (const [row, col] of cells) {
+      const cell = tileRect(row, col);
+      const y = cell.y + offsetY;
+      if (!claimed.has(key(row - 1, col))) {
+        for (let x = cell.x; x < cell.x + cell.w - 1; x++) put(raster, x, y + ring, top);
+      }
+      if (!claimed.has(key(row, col - 1))) {
+        for (let dy = 0; dy < cell.h - 1; dy++) put(raster, cell.x + ring, y + dy, top);
+      }
     }
   }
-  for (const [row, col] of cells) {
-    const cell = tileRect(row, col);
-    const y = cell.y + offsetY;
-    if (!claimed.has(key(row - 1, col))) {
-      for (let x = cell.x; x < cell.x + cell.w - 1; x++) put(raster, x, y, top);
-    }
-    if (!claimed.has(key(row, col - 1))) {
-      for (let dy = 0; dy < cell.h - 1; dy++) put(raster, cell.x, y + dy, top);
-    }
+}
+
+/**
+ * The lattice cells a free-standing box covers — how a plate dragged to any size is
+ * snapped back onto the grid when it turns into connectable tiles.
+ */
+export function cellsCovering(box: Rect): TileCell[] {
+  const colStart = Math.max(0, Math.round((box.x - TILE_X0) / TILE));
+  const rowStart = Math.max(0, Math.round((box.y - TILE_Y0) / TILE));
+  const colEnd = Math.max(colStart, Math.min(12, Math.round((box.x + box.w - TILE_X0) / TILE) - 1));
+  const rowEnd = Math.max(rowStart, Math.min(12, Math.round((box.y + box.h - TILE_Y0) / TILE) - 1));
+
+  const cells: TileCell[] = [];
+  for (let row = rowStart; row <= rowEnd; row++) {
+    for (let col = colStart; col <= colEnd; col++) cells.push([row, col]);
   }
+  return cells;
 }

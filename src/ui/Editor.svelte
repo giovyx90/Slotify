@@ -24,12 +24,13 @@
   import { hueShiftedBevels } from "../engine/paint";
   import { encodePng } from "../engine/png";
   import { serializeProject, type Element, type Project } from "../engine/project";
+  import type { PlateStyle } from "../engine/paint";
   import type { Raster } from "../engine/raster";
   import { bakeSheet, type RenderContext } from "../engine/renderProject";
   import { snapToEdges } from "../engine/snap";
   import { spliceProviders } from "../engine/spliceGuiJson";
   import { measureText, type BitmapFont, type ShadowDir } from "../engine/textFont";
-  import { cellAt, type TileCell } from "../engine/tiles";
+  import { cellAt, cellsCovering, regionBBox, type TileCell } from "../engine/tiles";
   import { parseCodepoint } from "../engine/unicode";
   import { visualsYmlBlock, configYmlBlock } from "../engine/visualsYml";
   import { joinPath, type FsBackend } from "../platform/fs";
@@ -87,10 +88,22 @@
     onExit: () => void;
   } = $props();
 
-  type Tool = "select" | "button" | "infobox" | "slot" | "erase" | "cover" | "text" | "panel" | "well" | "hotspot";
+  type Tool =
+    | "select"
+    | "button"
+    | "plate"
+    | "infobox"
+    | "slot"
+    | "erase"
+    | "cover"
+    | "text"
+    | "panel"
+    | "well"
+    | "hotspot";
   /** Also the digit shortcuts, in this order: 1 selects, 2 draws a button, and so on. */
   const TOOLS: Tool[] = [
-    "select", "button", "infobox", "slot", "erase", "cover", "text", "panel", "well", "hotspot",
+    "select", "button", "plate", "infobox", "slot", "erase", "cover", "text", "panel", "well",
+    "hotspot",
   ];
   let tool: Tool = $state("select");
   let selectedId: string | null = $state(null);
@@ -106,6 +119,10 @@
   /** The eight corners and edges of the selection box, as a drag can grab them. */
   type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
   const RESIZABLE = ["button", "panel", "well", "infobox"];
+  const PLATE_STYLES: PlateStyle[] = ["single", "double", "flat"];
+  /** Cell multiples, then the whole window: the widths a real screen actually uses. */
+  const WIDTH_PRESETS = [18, 36, 54, 90, WINDOW_W];
+  const HEIGHT_PRESETS = [12, 16, 18, 36];
   type DragState =
     | {
         kind: "move";
@@ -126,6 +143,8 @@
    * The composed screen as last drawn, kept so the eyedropper reads the artwork and not
    * the chrome painted over it — a pick on a selected element must not return red.
    */
+  /** The plate being dragged out right now, so a click without a drag still lands. */
+  let creating: string | null = null;
   let composed: Raster | null = null;
   let eyedropper: ((hex: string) => void) | null = $state(null);
 
@@ -790,6 +809,19 @@
       return;
     }
 
+    // The plate: a button at whatever size the drag gives it, off the 18px lattice
+    // entirely. Released without moving, it takes the size a button usually wants.
+    if (tool === "plate") {
+      const element: Element = { id: nextId(), kind: "button", x: point.x, y: point.y, w: 2, h: 2 };
+      project = { ...project, elements: [...project.elements, element] };
+      selectedId = element.id;
+      creating = element.id;
+      tool = "select";
+      drag = { kind: "resize", id: element.id, handle: "se", x: point.x, y: point.y, w: 2, h: 2 };
+      (event.target as HTMLElement).setPointerCapture(event.pointerId);
+      return;
+    }
+
     if (tool === "infobox") {
       // The project-standard infobox: full window width, the skin's native height,
       // top snapped to the tapped lattice row — exactly the template, not a mini-box.
@@ -987,6 +1019,15 @@
   }
 
   function onPointerUp(): void {
+    if (creating) {
+      const element = project.elements.find((candidate) => candidate.id === creating);
+      if (element && element.w < 6 && element.h < 6) {
+        element.w = 40;
+        element.h = 18;
+        touch();
+      }
+      creating = null;
+    }
     if (drag) flushHistory();
     drag = null;
   }
@@ -1179,6 +1220,58 @@
     const [moved] = elements.splice(index, 1);
     elements.splice(target, 0, moved!);
     project = { ...project, elements };
+  }
+
+  /**
+   * Off the lattice: the tile region keeps its box and becomes a plate, free to be any
+   * size. The label, colour and bevel come with it.
+   */
+  function toFreePlate(element: Element): void {
+    if (element.kind !== "tiles" || element.tileKind !== "button") return;
+    const box = regionBBox((element.cells ?? []) as TileCell[]);
+    const replacement: Element = {
+      ...structuredClone($state.snapshot(element)),
+      kind: "button",
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+    };
+    delete replacement.cells;
+    delete replacement.tileKind;
+    project = {
+      ...project,
+      elements: project.elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)),
+    };
+    statusLine = "now a free plate - drag its handles to any size";
+  }
+
+  /** Back onto the lattice: the nearest whole cells the box covers. */
+  function toTiles(element: Element): void {
+    if (element.kind !== "button") return;
+    const cells = cellsCovering(element);
+    const box = regionBBox(cells);
+    const replacement: Element = {
+      ...structuredClone($state.snapshot(element)),
+      kind: "tiles",
+      tileKind: "button",
+      cells,
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+    };
+    project = {
+      ...project,
+      elements: project.elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)),
+    };
+    statusLine = `snapped onto ${cells.length} cell(s) of the lattice`;
+  }
+
+  function setSize(dimension: "w" | "h", value: number): void {
+    if (!selected || selected.kind === "tiles") return;
+    selected[dimension] = value;
+    touch();
   }
 
   function toggleFlag(element: Element, flag: "hidden" | "locked"): void {
@@ -1455,7 +1548,10 @@
             >{candidate}</button>
           {/each}
         </div>
-        <p class="hint">Button and infobox grow tile by tile: tap a cell, then the next.</p>
+        <p class="hint">
+          Button and infobox grow tile by tile: tap a cell, then the next. Plate is the
+          same button off the lattice - drag out any size.
+        </p>
       </section>
 
       <section class="card">
@@ -1605,8 +1701,32 @@
               <label class="field"><span>w</span><input type="number" min="2" bind:value={selected.w} onchange={touch} /></label>
               <label class="field"><span>h</span><input type="number" min="2" bind:value={selected.h} onchange={touch} /></label>
             </div>
+            {#if RESIZABLE.includes(selected.kind)}
+              <div class="presets">
+                <span class="label-mono">w</span>
+                {#each WIDTH_PRESETS as preset}
+                  <button class="btn sm" onclick={() => setSize("w", preset)}>{preset}</button>
+                {/each}
+              </div>
+              <div class="presets">
+                <span class="label-mono">h</span>
+                {#each HEIGHT_PRESETS as preset}
+                  <button class="btn sm" onclick={() => setSize("h", preset)}>{preset}</button>
+                {/each}
+              </div>
+            {/if}
+            {#if selected.kind === "button"}
+              <button class="btn block sm top" onclick={() => toTiles(selected!)}>
+                Snap onto the lattice
+              </button>
+            {/if}
           {:else}
             <p class="hint">Tap cells with the {selected.tileKind} tool to grow or shrink this piece.</p>
+            {#if selected.tileKind === "button"}
+              <button class="btn block sm" onclick={() => toFreePlate(selected!)}>
+                Free from the lattice
+              </button>
+            {/if}
           {/if}
 
           {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "panel" || (selected.kind === "tiles" && selected.tileKind === "button")}
@@ -1667,7 +1787,40 @@
             </div>
           {/if}
 
+          {#if selected.kind === "button" || (selected.kind === "tiles" && selected.tileKind === "button")}
+            <label class="field top"><span>edge</span>
+              <select
+                value={selected.bevel ?? "single"}
+                onchange={(event) => { selected!.bevel = (event.target as HTMLSelectElement).value as PlateStyle; touch(); }}
+              >
+                <option value="single">single - 1px bevel</option>
+                <option value="double">double - 2px, for big plates</option>
+                <option value="flat">flat - outline only</option>
+              </select>
+            </label>
+          {/if}
+
           {#if hasText}
+            <div class="grid2 top">
+              <label class="field"><span>align</span>
+                <select
+                  value={selected.align ?? "center"}
+                  onchange={(event) => { selected!.align = (event.target as HTMLSelectElement).value as "left" | "center" | "right"; touch(); }}
+                >
+                  <option value="left">left</option>
+                  <option value="center">centre</option>
+                  <option value="right">right</option>
+                </select>
+              </label>
+              <label class="field" title="Nudge the text off that position">
+                <span>text dx</span>
+                <input type="number" value={selected.textDx ?? 0} onchange={(event) => { selected!.textDx = Number((event.target as HTMLInputElement).value); touch(); }} />
+              </label>
+              <label class="field">
+                <span>text dy</span>
+                <input type="number" value={selected.textDy ?? 0} onchange={(event) => { selected!.textDy = Number((event.target as HTMLInputElement).value); touch(); }} />
+              </label>
+            </div>
             <div class="grid2 top">
               <label class="field"><span>font</span>
                 <select value={selected.font ?? "minecraft"} onchange={(event) => { selected!.font = (event.target as HTMLSelectElement).value as "minecraft" | "mono5"; retextSize(selected!); touch(); }}>
@@ -2171,6 +2324,21 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0.25rem;
+  }
+
+  /* Preset sizes: a label and a short row of the numbers a screen actually uses. */
+  .presets {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    margin-top: 0.3rem;
+  }
+
+  .presets .btn {
+    flex: 1;
+    min-width: 0;
+    padding-left: 0.2rem;
+    padding-right: 0.2rem;
   }
 
   .truncate-line {

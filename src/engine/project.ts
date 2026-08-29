@@ -39,6 +39,11 @@ export const ShadowDirSchema = z.enum([
 
 export const FontChoiceSchema = z.enum(["minecraft", "mono5"]);
 
+/** How a plate's edge is drawn. `double` is the same bevel two pixels deep. */
+export const PlateStyleSchema = z.enum(["single", "double", "flat"]);
+
+export const TextAlignSchema = z.enum(["left", "center", "right"]);
+
 /** A cell of the 18px tile lattice (borders shared with the slot grid, origin (7,17)). */
 export const TileCellSchema = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
 
@@ -75,6 +80,13 @@ export const ElementSchema = z.object({
   cells: z.array(TileCellSchema).optional(),
   /** Vertical gap between infobox/text lines, pixels. */
   lineGap: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional(),
+  /** Button/tile-button edge treatment. Default single, the vanilla one-pixel bevel. */
+  bevel: PlateStyleSchema.optional(),
+  /** Where a label or the infobox lines sit across the box. Default centre. */
+  align: TextAlignSchema.optional(),
+  /** Nudges the text off that position, in pixels. */
+  textDx: z.number().int().optional(),
+  textDy: z.number().int().optional(),
   /** Not drawn, and therefore not exported. The layer list keeps it in reach. */
   hidden: z.boolean().optional(),
   /** Ignored by clicks on the canvas: a big panel stops swallowing what sits on it. */

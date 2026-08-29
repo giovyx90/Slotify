@@ -4,6 +4,7 @@ import { SHEET_CANVAS, SHEET_TO_WINDOW_Y, windowHeight } from "./geometry";
 import { drawNinepatch } from "./ninepatch";
 import {
   drawInset,
+  drawPlate,
   drawRaised,
   drawSlotWell,
   hueShiftedBevels,
@@ -110,6 +111,16 @@ function drawLine(
   blit(sheet, scaleRaster(line, scale), x, y);
 }
 
+/**
+ * Where a run of text sits inside a box. Centred unless told otherwise; the two pixels
+ * of padding on left and right keep a label off the bevel it would otherwise touch.
+ */
+function alignedX(align: Element["align"], boxX: number, boxW: number, textW: number): number {
+  if (align === "left") return boxX + 2;
+  if (align === "right") return boxX + boxW - textW - 2;
+  return boxX + Math.floor((boxW - textW) / 2);
+}
+
 function drawLabelCentred(
   sheet: Raster,
   font: BitmapFont,
@@ -128,8 +139,8 @@ function drawLabelCentred(
     element.label ?? "",
     element.textColor ?? fallbackColour,
     element.shadow ?? "none",
-    x + Math.floor((w - size.w * scale) / 2),
-    y + Math.floor((h - size.h * scale) / 2),
+    alignedX(element.align, x, w, size.w * scale) + (element.textDx ?? 0),
+    y + Math.floor((h - size.h * scale) / 2) + (element.textDy ?? 0),
     scale,
   );
 }
@@ -177,14 +188,18 @@ function drawInfoboxLines(
   (element.lines ?? []).forEach((line, index) => {
     const colour = element.lineColors?.[index] ?? element.textColor ?? INFOBOX_TEXT_DEFAULT;
     const size = measureText(font, line);
+    const textX =
+      element.align == null || element.align === "center"
+        ? x + Math.max(5, Math.floor((element.w - size.w * scale) / 2))
+        : alignedX(element.align, x + 5, element.w - 10, size.w * scale);
     drawLine(
       sheet,
       font,
       line,
       colour,
       element.shadow ?? "none",
-      x + Math.max(5, Math.floor((element.w - size.w * scale) / 2)),
-      y + 6 + index * lineHeight,
+      textX + (element.textDx ?? 0),
+      y + 6 + index * lineHeight + (element.textDy ?? 0),
       scale,
     );
   });
@@ -206,8 +221,13 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
 
     case "button": {
       const { fill, bevels } = bevelsFor(element);
-      if (element.pressed) drawInset(sheet, x, y, element.w, element.h, fill, bevels);
-      else drawRaised(sheet, x, y, element.w, element.h, fill, bevels);
+      if (element.bevel && element.bevel !== "single") {
+        drawPlate(sheet, x, y, element.w, element.h, fill, bevels, element.pressed ?? false, element.bevel);
+      } else if (element.pressed) {
+        drawInset(sheet, x, y, element.w, element.h, fill, bevels);
+      } else {
+        drawRaised(sheet, x, y, element.w, element.h, fill, bevels);
+      }
       if (element.label && font) {
         drawLabelCentred(sheet, font, element, x, y, element.w, element.h, TEXT_DEFAULT);
       }
@@ -263,7 +283,7 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
         drawInfoboxLines(sheet, context, element, box.x, box.y + dy);
       } else {
         const { fill, bevels } = bevelsFor(element);
-        drawTileRegion(sheet, cells, fill, bevels, element.pressed ?? false, dy);
+        drawTileRegion(sheet, cells, fill, bevels, element.pressed ?? false, dy, element.bevel ?? "single");
         if (element.label && font) {
           drawLabelCentred(sheet, font, element, box.x, box.y + dy, box.w, box.h, TEXT_DEFAULT);
         }

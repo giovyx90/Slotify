@@ -82,6 +82,59 @@ export function hueShiftedBevels(fill: RGBA): BevelSet {
   };
 }
 
+/**
+ * How thick, and how, a plate's edge is drawn.
+ *
+ * `single` is the vanilla one-pixel bevel. `double` is the same two pixels deep, which
+ * is what a large button needs: at 36px across a one-pixel bevel reads as a flat
+ * rectangle with a stray line on it. `flat` drops the bevel for a plain dark outline —
+ * the look of a tag or a chip rather than a key you press.
+ */
+export type PlateStyle = "single" | "double" | "flat";
+
+/**
+ * The general plate: raised or pressed, at any bevel depth. `drawRaised` and
+ * `drawInset` below are this with the arguments the vanilla screens use.
+ */
+export function drawPlate(
+  raster: Raster,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fill: RGBA,
+  bevels: BevelSet,
+  pressed = false,
+  style: PlateStyle = "single",
+): void {
+  rect(raster, x, y, w, h, fill);
+
+  if (style === "flat") {
+    outline(raster, x, y, w, h, bevels.edge);
+    return;
+  }
+
+  const top = pressed ? bevels.dark : bevels.light;
+  const bottom = pressed ? bevels.light : bevels.dark;
+  const depth = style === "double" ? 2 : 1;
+
+  // Each ring is inset one pixel further in; a plate too small for two rings gets one.
+  for (let ring = 0; ring < Math.min(depth, Math.floor(Math.min(w, h) / 2)); ring++) {
+    const left = x + ring;
+    const upper = y + ring;
+    const width = w - ring * 2;
+    const height = h - ring * 2;
+    for (let dx = 0; dx < width - 1; dx++) {
+      put(raster, left + dx, upper, top);
+      put(raster, left + dx + 1, upper + height - 1, bottom);
+    }
+    for (let dy = 0; dy < height - 1; dy++) {
+      put(raster, left, upper + dy, top);
+      put(raster, left + width - 1, upper + dy + 1, bottom);
+    }
+  }
+}
+
 /** A raised plate — light on top/left, dark on bottom/right: reads as a button. */
 export function drawRaised(
   raster: Raster,
