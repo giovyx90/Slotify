@@ -103,6 +103,32 @@ export const HotspotSchema = z.object({
   slots: z.array(z.number().int().nonnegative()),
 });
 
+/**
+ * A state drawn *on top of* the base screen: its own sheet, its own codepoint, its own
+ * provider — and nothing of the window in it.
+ *
+ * This is how a screen gets a second state without being redrawn. The title string is
+ * base + overlay (see `composeTitle`), the client draws both glyphs at the same origin,
+ * and the overlay's transparent pixels are the base showing through. An overlay that
+ * baked the window would paint over the very thing it is meant to sit on, so
+ * `overlayProject` forces that off rather than trusting the field.
+ */
+export const OverlaySchema = z.object({
+  /** Stable: it names the Java constant and the exported texture. */
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
+  name: z.string().min(1),
+  codepoint: z.string().regex(/^U\+[0-9A-Fa-f]{4,6}$/),
+  textureFile: z.string().min(1),
+  /**
+   * Almost always absent: an overlay authored in the base's window coordinates wants the
+   * base's ascent, and giving it its own is how a state ends up a few pixels off.
+   */
+  ascent: z.number().int().optional(),
+  elements: z.array(ElementSchema),
+  /** Slots this state makes clickable, on top of whatever the base already offers. */
+  hotspots: z.array(HotspotSchema).default([]),
+});
+
 export const ProjectSchema = z.object({
   version: z.literal(1),
   module: z.string().min(1),
@@ -124,6 +150,8 @@ export const ProjectSchema = z.object({
   palette: z.array(SwatchSchema).optional(),
   elements: z.array(ElementSchema),
   hotspots: z.array(HotspotSchema),
+  /** States drawn over this screen, each its own sheet. Order is the title's order. */
+  overlays: z.array(OverlaySchema).default([]),
   /** Container slots (raw index) removed from the drawn grid. */
   hiddenSlots: z.array(z.number().int().nonnegative()).optional(),
   /** Viewer-inventory slots removed: 0–26 main inventory, 27–35 hotbar. */
@@ -142,6 +170,7 @@ export const ProjectSchema = z.object({
 
 export type Element = z.infer<typeof ElementSchema>;
 export type Hotspot = z.infer<typeof HotspotSchema>;
+export type Overlay = z.infer<typeof OverlaySchema>;
 export type Swatch = z.infer<typeof SwatchSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
 
@@ -160,6 +189,7 @@ export function newProject(module: string, screenKey: string, codepoint: string)
     textureFile: `custom_ui/${module}/${screenKey}.png`,
     elements: [],
     hotspots: [],
+    overlays: [],
     bakeWindow: true,
   };
 }

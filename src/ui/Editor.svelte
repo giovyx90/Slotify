@@ -23,7 +23,19 @@
   } from "../engine/palette";
   import { hueShiftedBevels } from "../engine/paint";
   import { encodePng } from "../engine/png";
-  import { serializeProject, type Element, type Project } from "../engine/project";
+  import {
+    serializeProject,
+    type Element,
+    type Hotspot,
+    type Overlay,
+    type Project,
+  } from "../engine/project";
+  import {
+    bakeScreen,
+    drawnSheet,
+    freeOverlayId,
+    overlayConstant,
+  } from "../engine/overlay";
   import type { PlateStyle } from "../engine/paint";
   import type { Raster } from "../engine/raster";
   import { bakeSheet, type RenderContext } from "../engine/renderProject";
@@ -31,7 +43,7 @@
   import { spliceProviders } from "../engine/spliceGuiJson";
   import { measureText, type BitmapFont, type ShadowDir } from "../engine/textFont";
   import { cellAt, cellsCovering, regionBBox, type TileCell } from "../engine/tiles";
-  import { parseCodepoint } from "../engine/unicode";
+  import { formatCodepoint, parseCodepoint } from "../engine/unicode";
   import { visualsYmlBlock, configYmlBlock } from "../engine/visualsYml";
   import { joinPath, type FsBackend } from "../platform/fs";
   import { pickFile } from "../platform/pick";
@@ -73,6 +85,7 @@
     infoboxSkin,
     panelSkin,
     packPalette,
+    suggestCodepoint,
     onExit,
   }: {
     project: Project;
@@ -85,6 +98,8 @@
     panelSkin?: { raster: Raster; border: number };
     /** The pack's named colours, from the profile. The project's own come first. */
     packPalette: Swatch[];
+    /** A codepoint nothing in the pack claims — the registry knows, this editor does not. */
+    suggestCodepoint: () => string;
     onExit: () => void;
   } = $props();
 
@@ -106,9 +121,50 @@
     "hotspot",
   ];
   let tool: Tool = $state("select");
+
+  /*
+   * Which layer the editor is writing to: the base screen, or one of its states.
+   *
+   * A state is a second sheet drawn over the first, so the whole editor has to point at
+   * one array of elements or another. Everything below reads `elements` and writes
+   * `setElements`; nothing touches `project.elements` directly any more, and that single
+   * indirection is what makes a state cost one sheet instead of a whole second screen.
+   */
+  let activeLayer: string | null = $state(null);
+  const layer = $derived(
+    activeLayer == null
+      ? null
+      : ((project.overlays ?? []).find((overlay) => overlay.id === activeLayer) ?? null),
+  );
+  const elements = $derived(layer ? layer.elements : project.elements);
+  const hotspots = $derived(layer ? layer.hotspots : project.hotspots);
+
+  function setElements(next: Element[]): void {
+    if (layer) {
+      layer.elements = next;
+      touch();
+      return;
+    }
+    project = { ...project, elements: next };
+  }
+
+  function setHotspots(next: Hotspot[]): void {
+    if (layer) {
+      layer.hotspots = next;
+      touch();
+      return;
+    }
+    project = { ...project, hotspots: next };
+  }
+
+  /** States shown behind or over what is being edited. The active one always shows. */
+  let previewLayers = $state(new Set<string>());
+  const shownOverlayIds = $derived(
+    new Set([...previewLayers, ...(activeLayer ? [activeLayer] : [])]),
+  );
   let selectedId: string | null = $state(null);
   let checked = $state(new Set<string>());
-  let activeHotspot: string | null = $state(project.hotspots[0]?.id ?? null);
+  let activeHotspot: string | null = $state(hotspots[0]?.id ?? null);
   let zoom = $state(2);
   let guides = $state(true);
   let statusLine = $state("");
@@ -224,8 +280,14 @@
     panelSkin,
     palette: packPalette,
   });
-  const baked = $derived(bakeSheet(project, background, context));
-  const selected = $derived(project.elements.find((element) => element.id === selectedId) ?? null);
+  const screenBake = $derived(bakeScreen(project, background, context));
+  /** The sheet the top bar measures and the export writes: whichever layer is active. */
+  const baked = $derived(
+    layer
+      ? (screenBake.overlays.find((entry) => entry.overlay.id === layer.id)?.bake ?? screenBake.base)
+      : screenBake.base,
+  );
+  const selected = $derived(elements.find((element) => element.id === selectedId) ?? null);
   const fillHex = $derived(resolveColour(selected?.color, palette, "#C6C6C6") ?? "#C6C6C6");
   const textHex = $derived(resolveColour(selected?.textColor, palette, "#FFFFFF") ?? "#FFFFFF");
   const bevelPreview = $derived(hueShiftedBevels(rgbaOf(fillHex)));
@@ -327,7 +389,7 @@
             return;
           case "a":
             event.preventDefault();
-            checked = new Set(project.elements.map((element) => element.id));
+            checked = new Set(elements.map((element) => element.id));
             statusLine = `${checked.size} layer(s) ticked`;
             return;
           default:
@@ -440,10 +502,10 @@
 
   function applySnapshot(text: string): void {
     project = JSON.parse(text) as Project;
-    if (selectedId && !project.elements.some((element) => element.id === selectedId)) selectedId = null;
-    checked = new Set([...checked].filter((id) => project.elements.some((element) => element.id === id)));
+    if (selectedId && !elements.some((element) => element.id === selectedId)) selectedId = null;
+    checked = new Set([...checked].filter((id) => elements.some((element) => element.id === id)));
     syncHistory();
-    void ensureSprites(project.elements);
+    void ensureSprites(elements);
   }
 
   function undoStep(): void {
@@ -495,8 +557,14 @@
 
   $effect(() => {
     void refreshLibrary();
-    void ensureSprites(project.elements);
-    const used = project.elements
+    // Element ids are handed out per project, not per layer: a layer copied into a
+    // state must not arrive carrying an id the base already answers to.
+    const everyElement = [
+      ...project.elements,
+      ...(project.overlays ?? []).flatMap((overlay) => overlay.elements),
+    ];
+    void ensureSprites(everyElement);
+    const used = everyElement
       .map((element) => Number(/^e(\d+)$/.exec(element.id)?.[1] ?? 0))
       .reduce((a, b) => Math.max(a, b), 0);
     if (used >= nextIdCounter) nextIdCounter = used + 1;
@@ -504,15 +572,23 @@
 
   $effect(() => {
     if (!canvas) return;
+    // The preview replays the title's real cursor arithmetic instead of assuming every
+    // sheet lands on the base origin, so a wrong advance displaces a state here by
+    // exactly what it would displace in game.
+    const shown = screenBake.overlays
+      .filter((entry) => shownOverlayIds.has(entry.overlay.id))
+      .map((entry) => drawnSheet(entry.bake, entry.overlay.ascent ?? project.ascent));
+
     const raster = renderScreen({
       rows: project.rows,
       shift: project.shift,
       base: {
         codepoint: parseCodepoint(project.codepoint),
-        advance: baked.advance,
+        advance: screenBake.base.advance,
         ascent: project.ascent,
-        texture: baked.sheet,
+        texture: screenBake.base.sheet,
       },
+      overlays: shown,
       pad: PAD,
       // When the window is baked into the sheet, drawing it again underneath would
       // fill the carved holes back in — the checkerboard behind IS the transparency.
@@ -582,7 +658,7 @@
       stroke(0, 0, 176, windowHeight(project.rows), OVERLAY.window);
     }
 
-    for (const hotspot of project.hotspots) {
+    for (const hotspot of hotspots) {
       const colour = ROLE_COLOURS[hotspot.role] ?? "#AAAAAA";
       for (const slot of hotspot.slots) {
         const rect = slotWindowRect(Math.floor(slot / COLS), slot % COLS);
@@ -615,7 +691,7 @@
     }
 
     for (const id of checked) {
-      const element = project.elements.find((candidate) => candidate.id === id);
+      const element = elements.find((candidate) => candidate.id === id);
       if (element) stroke(element.x - 1, element.y - 1, element.w + 2, element.h + 2, OVERLAY.staged);
     }
 
@@ -689,8 +765,8 @@
   }
 
   function hitElement(x: number, y: number): Element | null {
-    for (let index = project.elements.length - 1; index >= 0; index--) {
-      const element = project.elements[index]!;
+    for (let index = elements.length - 1; index >= 0; index--) {
+      const element = elements[index]!;
       if (element.locked || element.hidden) continue;
       if (x >= element.x && x < element.x + element.w && y >= element.y && y < element.y + element.h) {
         return element;
@@ -759,7 +835,7 @@
     if (current && inRegion) {
       current.cells = cells.filter(([r, c]) => !(r === row && c === col));
       if (current.cells.length === 0) {
-        project = { ...project, elements: project.elements.filter((element) => element.id !== current.id) };
+        setElements(elements.filter((element) => element.id !== current.id));
         selectedId = null;
         return;
       }
@@ -799,7 +875,7 @@
       h: 18,
       ...(tileKind === "infobox" ? { lines: ["Info line"], font: "minecraft" as const } : { label: "" }),
     };
-    project = { ...project, elements: [...project.elements, element] };
+    setElements([...elements, element]);
     selectedId = element.id;
   }
 
@@ -866,7 +942,7 @@
         point.y - (pendingComponent.h >> 1),
         nextId,
       );
-      project = { ...project, elements: [...project.elements, ...placed] };
+      setElements([...elements, ...placed]);
       void ensureSprites(placed);
       selectedId = placed[0]?.id ?? null;
       statusLine = `placed ${pendingComponent.name}`;
@@ -883,7 +959,7 @@
     // entirely. Released without moving, it takes the size a button usually wants.
     if (tool === "plate") {
       const element: Element = { id: nextId(), kind: "button", x: point.x, y: point.y, w: 2, h: 2 };
-      project = { ...project, elements: [...project.elements, element] };
+      setElements([...elements, element]);
       selectedId = element.id;
       creating = element.id;
       tool = "select";
@@ -907,7 +983,7 @@
         font: "minecraft",
         textScale: 2,
       };
-      project = { ...project, elements: [...project.elements, element] };
+      setElements([...elements, element]);
       selectedId = element.id;
       tool = "select";
       return;
@@ -928,7 +1004,7 @@
       const row = Math.floor((point.y - GRID_Y) / CELL);
       if (col < 0 || col >= COLS || row < 0 || row >= project.rows || !activeHotspot) return;
       const index = slotIndex(row, col);
-      const hotspot = project.hotspots.find((candidate) => candidate.id === activeHotspot);
+      const hotspot = hotspots.find((candidate) => candidate.id === activeHotspot);
       if (!hotspot) return;
       hotspot.slots = hotspot.slots.includes(index)
         ? hotspot.slots.filter((slot) => slot !== index)
@@ -948,7 +1024,7 @@
       const at = tool === "slot" ? snapSlot(point.x, point.y) : { x: point.x - (base.w >> 1), y: point.y - (base.h >> 1) };
       const element: Element = { id: nextId(), kind: tool as Element["kind"], x: at.x, y: at.y, ...base } as Element;
       if (element.kind === "text") retextSize(element);
-      project = { ...project, elements: [...project.elements, element] };
+      setElements([...elements, element]);
       selectedId = element.id;
       tool = "select";
       return;
@@ -982,7 +1058,7 @@
       const ids =
         checked.has(hit.id) && checked.size > 1
           ? [...checked].filter((id) => {
-              const element = project.elements.find((candidate) => candidate.id === id);
+              const element = elements.find((candidate) => candidate.id === id);
               return element != null && element.kind !== "tiles" && !element.locked;
             })
           : [hit.id];
@@ -994,7 +1070,7 @@
         startY: point.y,
         origins: new Map(
           ids.map((id) => {
-            const element = project.elements.find((candidate) => candidate.id === id)!;
+            const element = elements.find((candidate) => candidate.id === id)!;
             return [id, { x: element.x, y: element.y }];
           }),
         ),
@@ -1009,7 +1085,7 @@
     if (!drag) return;
 
     if (drag.kind === "resize") {
-      const element = project.elements.find((candidate) => candidate.id === drag!.id);
+      const element = elements.find((candidate) => candidate.id === drag!.id);
       if (!element) return;
       resizeTo(element, drag.handle, drag, point);
       touch();
@@ -1018,7 +1094,7 @@
 
     const dragging = drag;
     const moved = dragging.ids
-      .map((id) => project.elements.find((candidate) => candidate.id === id))
+      .map((id) => elements.find((candidate) => candidate.id === id))
       .filter((element): element is Element => element != null);
     if (moved.length === 0) return;
 
@@ -1033,7 +1109,7 @@
       if (element.kind === "slot") {
         ({ x, y } = snapSlot(x + 8, y + 8));
       } else {
-        const others = project.elements
+        const others = elements
           .filter((candidate) => candidate.id !== element.id)
           .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
         ({ x, y } = snapToEdges({ x, y, w: element.w, h: element.h }, others));
@@ -1050,7 +1126,7 @@
       return { x: origin.x + dx, y: origin.y + dy, w: element.w, h: element.h };
     });
     const group = boundingBox(boxes);
-    const others = project.elements
+    const others = elements
       .filter((candidate) => !dragging.ids.includes(candidate.id))
       .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
     const snapped = snapToEdges(group, others);
@@ -1090,7 +1166,7 @@
 
   function onPointerUp(): void {
     if (creating) {
-      const element = project.elements.find((candidate) => candidate.id === creating);
+      const element = elements.find((candidate) => candidate.id === creating);
       if (element && element.w < 6 && element.h < 6) {
         element.w = 40;
         element.h = 18;
@@ -1110,7 +1186,7 @@
   function selectionElements(): Element[] {
     const ids = checked.size > 1 ? [...checked] : selectedId ? [selectedId] : [];
     return ids
-      .map((id) => project.elements.find((element) => element.id === id))
+      .map((id) => elements.find((element) => element.id === id))
       .filter((element): element is Element => element != null);
   }
 
@@ -1132,7 +1208,7 @@
   function removeSelected(): void {
     const ids = new Set(selectionElements().map((element) => element.id));
     if (ids.size === 0) return;
-    project = { ...project, elements: project.elements.filter((element) => !ids.has(element.id)) };
+    setElements(elements.filter((element) => !ids.has(element.id)));
     selectedId = null;
     checked = new Set([...checked].filter((id) => !ids.has(id)));
     statusLine = `${ids.size} layer(s) deleted`;
@@ -1148,7 +1224,7 @@
       x: element.x + 2,
       y: element.y + 2,
     })) as Element[];
-    project = { ...project, elements: [...project.elements, ...copies] };
+    setElements([...elements, ...copies]);
     void ensureSprites(copies);
     selectedId = copies[0]!.id;
     checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
@@ -1202,9 +1278,9 @@
    * which is what lets a row of buttons cross from one screen to another.
    */
   async function copySelection(): Promise<void> {
-    const elements = selectionElements();
-    if (elements.length === 0) return;
-    clipboard = structuredClone($state.snapshot(elements)) as Element[];
+    const chosen = selectionElements();
+    if (chosen.length === 0) return;
+    clipboard = structuredClone($state.snapshot(chosen)) as Element[];
     try {
       await navigator.clipboard.writeText(JSON.stringify({ kind: CLIPBOARD_KIND, elements: clipboard }));
     } catch {
@@ -1214,25 +1290,25 @@
   }
 
   async function pasteClipboard(): Promise<void> {
-    let elements = clipboard;
+    let source = clipboard;
     try {
       const text = await navigator.clipboard.readText();
       const parsed = JSON.parse(text) as { kind?: string; elements?: Element[] };
-      if (parsed.kind === CLIPBOARD_KIND && Array.isArray(parsed.elements)) elements = parsed.elements;
+      if (parsed.kind === CLIPBOARD_KIND && Array.isArray(parsed.elements)) source = parsed.elements;
     } catch {
       // not our JSON, or no permission — fall back to what this window copied
     }
-    if (elements.length === 0) {
+    if (source.length === 0) {
       statusLine = "nothing to paste";
       return;
     }
-    const copies = elements.map((element) => ({
+    const copies = source.map((element) => ({
       ...structuredClone(element),
       id: nextId(),
       x: element.x + 4,
       y: element.y + 4,
     })) as Element[];
-    project = { ...project, elements: [...project.elements, ...copies] };
+    setElements([...elements, ...copies]);
     void ensureSprites(copies);
     selectedId = copies[0]!.id;
     checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
@@ -1283,13 +1359,13 @@
    * Layer order is draw order: earlier in the list is drawn first, so it ends up behind.
    */
   function moveLayer(id: string, delta: number): void {
-    const index = project.elements.findIndex((element) => element.id === id);
+    const index = elements.findIndex((element) => element.id === id);
     const target = index + delta;
-    if (index < 0 || target < 0 || target >= project.elements.length) return;
-    const elements = [...project.elements];
-    const [moved] = elements.splice(index, 1);
-    elements.splice(target, 0, moved!);
-    project = { ...project, elements };
+    if (index < 0 || target < 0 || target >= elements.length) return;
+    const reordered = [...elements];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(target, 0, moved!);
+    setElements(reordered);
   }
 
   /**
@@ -1309,10 +1385,7 @@
     };
     delete replacement.cells;
     delete replacement.tileKind;
-    project = {
-      ...project,
-      elements: project.elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)),
-    };
+    setElements(elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)));
     statusLine = "now a free plate - drag its handles to any size";
   }
 
@@ -1331,10 +1404,7 @@
       w: box.w,
       h: box.h,
     };
-    project = {
-      ...project,
-      elements: project.elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)),
-    };
+    setElements(elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)));
     statusLine = `snapped onto ${cells.length} cell(s) of the lattice`;
   }
 
@@ -1342,6 +1412,101 @@
     if (!selected || selected.kind === "tiles") return;
     selected[dimension] = value;
     touch();
+  }
+
+  /**
+   * A new state: its own codepoint, its own sheet, no elements. It draws over the base
+   * and the base is not copied into it — which is the entire point.
+   */
+  /**
+   * The registry knows what the pack has claimed; it does not know about the states this
+   * project added since the last export. Two new states in a row would otherwise be
+   * handed the same codepoint, and the second would silently win in game.
+   */
+  function freeCodepoint(): string {
+    const taken = new Set(
+      [project.codepoint, ...(project.overlays ?? []).map((overlay) => overlay.codepoint)].map(
+        (value) => value.toUpperCase(),
+      ),
+    );
+    let candidate = parseCodepoint(suggestCodepoint());
+    while (taken.has(formatCodepoint(candidate))) candidate++;
+    return formatCodepoint(candidate);
+  }
+
+  function addState(): void {
+    const name = `State ${(project.overlays ?? []).length + 1}`;
+    const id = freeOverlayId(name, project);
+    const overlay: Overlay = {
+      id,
+      name,
+      codepoint: freeCodepoint(),
+      textureFile: `custom_ui/${project.module}/${project.screenKey}-${id}.png`,
+      elements: [],
+      hotspots: [],
+    };
+    project = { ...project, overlays: [...(project.overlays ?? []), overlay] };
+    // Visible from the moment it exists, including from the base: a state you cannot
+    // see while editing the thing underneath it is a state you will draw twice.
+    previewLayers = new Set([...previewLayers, id]);
+    selectLayer(id);
+    statusLine = `state "${name}" added - it draws over the base and exports its own sheet`;
+  }
+
+  /** Copies a state's contents into a new one, for two states that differ in a detail. */
+  function duplicateState(source: Overlay): void {
+    const name = `${source.name} copy`;
+    const id = freeOverlayId(name, project);
+    const overlay: Overlay = {
+      ...structuredClone($state.snapshot(source)),
+      id,
+      name,
+      codepoint: freeCodepoint(),
+      textureFile: `custom_ui/${project.module}/${project.screenKey}-${id}.png`,
+      elements: structuredClone($state.snapshot(source.elements)).map((element) => ({
+        ...element,
+        id: nextId(),
+      })),
+    };
+    project = { ...project, overlays: [...(project.overlays ?? []), overlay] };
+    previewLayers = new Set([...previewLayers, id]);
+    selectLayer(id);
+  }
+
+  function removeState(overlay: Overlay): void {
+    if (!window.confirm(`Delete the state "${overlay.name}"? Its sheet stays in the pack.`)) return;
+    project = {
+      ...project,
+      overlays: (project.overlays ?? []).filter((candidate) => candidate.id !== overlay.id),
+    };
+    if (activeLayer === overlay.id) selectLayer(null);
+    statusLine = `state deleted - ${overlay.textureFile} is still on disk`;
+  }
+
+  /** Title order: each state backtracks by the advance of the sheet drawn before it. */
+  function moveState(id: string, delta: number): void {
+    const states = [...(project.overlays ?? [])];
+    const index = states.findIndex((overlay) => overlay.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= states.length) return;
+    const [moved] = states.splice(index, 1);
+    states.splice(target, 0, moved!);
+    project = { ...project, overlays: states };
+  }
+
+  function selectLayer(id: string | null): void {
+    activeLayer = id;
+    selectedId = null;
+    checked = new Set();
+    activeHotspot = null;
+    if (tool === "hotspot") tool = "select";
+  }
+
+  function togglePreviewLayer(id: string): void {
+    const next = new Set(previewLayers);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    previewLayers = next;
   }
 
   function toggleFlag(element: Element, flag: "hidden" | "locked"): void {
@@ -1397,12 +1562,12 @@
 
   async function saveSelectionAsComponent(): Promise<void> {
     const ids = checked.size > 0 ? checked : selectedId ? new Set([selectedId]) : new Set<string>();
-    const elements = project.elements.filter((element) => ids.has(element.id));
-    if (elements.length === 0 || !componentName.trim()) {
+    const chosen = elements.filter((element) => ids.has(element.id));
+    if (chosen.length === 0 || !componentName.trim()) {
       statusLine = "check some layers and give the component a name first";
       return;
     }
-    const component = componentFromElements(slugify(componentName), componentName.trim(), elements);
+    const component = componentFromElements(slugify(componentName), componentName.trim(), chosen);
     await saveComponent(backend, packRoot, component);
     componentName = "";
     checked = new Set();
@@ -1474,8 +1639,8 @@
   }
 
   function addHotspot(): void {
-    const id = `group${project.hotspots.length + 1}`;
-    project = { ...project, hotspots: [...project.hotspots, { id, role: "action", slots: [] }] };
+    const id = `group${hotspots.length + 1}`;
+    setHotspots([...hotspots, { id, role: "action", slots: [] }]);
     activeHotspot = id;
     tool = "hotspot";
   }
@@ -1517,36 +1682,55 @@
     statusLine = `preview written to ${path}`;
   }
 
+  /**
+   * Writes every sheet this screen owns — the base and one per state — and splices all
+   * their providers into `gui.json` in one pass. The whole screen goes out together
+   * because a state exported without its base, or a base without the state that was
+   * edited beside it, is a pack that disagrees with itself.
+   */
   async function exportToPack(): Promise<void> {
-    const texturePath = joinPath(
-      packRoot, "pack-source", project.module, "assets/minecraft/textures", project.textureFile,
-    );
+    const sheets = [
+      { name: "base", file: project.textureFile, bake: screenBake.base },
+      ...screenBake.overlays.map((entry) => ({
+        name: entry.overlay.id,
+        file: entry.overlay.textureFile,
+        bake: entry.bake,
+      })),
+    ];
 
-    // What is about to be overwritten, kept and counted. The splice into gui.json is
-    // proven byte-identical by a golden test; the texture never was, and this is a
-    // one-way door onto somebody's art.
-    let textureNote = "new texture";
-    try {
-      const existing = await backend.read(texturePath);
-      await backend.write(`${texturePath}.bak`, existing);
-      const changed = pixelsChanged(decodeTexture(existing), baked.sheet);
-      textureNote = changed < 0 ? "texture replaced (different size)" : `${changed} pixel(s) changed`;
-    } catch {
-      // nothing there yet
+    const notes: string[] = [];
+    for (const sheet of sheets) {
+      const texturePath = joinPath(
+        packRoot, "pack-source", project.module, "assets/minecraft/textures", sheet.file,
+      );
+
+      // What is about to be overwritten, kept and counted. The splice into gui.json is
+      // proven byte-identical by a golden test; the texture never was, and this is a
+      // one-way door onto somebody's art.
+      let note = "new";
+      try {
+        const existing = await backend.read(texturePath);
+        await backend.write(`${texturePath}.bak`, existing);
+        const changed = pixelsChanged(decodeTexture(existing), sheet.bake.sheet);
+        note = changed < 0 ? "resized" : `${changed}px changed`;
+      } catch {
+        // nothing there yet
+      }
+      await backend.write(texturePath, encodePng(sheet.bake.sheet));
+      notes.push(`${sheet.name}: ${note}, advance ${sheet.bake.advance}`);
     }
-    await backend.write(texturePath, encodePng(baked.sheet));
 
     const guiJsonPath = joinPath(packRoot, fontPath);
     const raw = await backend.readText(guiJsonPath);
-    const result = spliceProviders(raw, [baked.provider]);
+    const result = spliceProviders(raw, sheets.map((sheet) => sheet.bake.provider));
     if (result.added.length > 0 || result.corrected.length > 0) {
       await backend.write(`${guiJsonPath}.bak`, new TextEncoder().encode(raw));
       await backend.write(guiJsonPath, new TextEncoder().encode(result.text));
     }
     statusLine =
-      `texture written (${textureNote}); gui.json: +${result.added.length} added, ` +
-      `${result.corrected.length} corrected, ${result.skipped.length} already present. ` +
-      `Advance ${baked.advance}, strays stripped ${baked.straysRemoved}.`;
+      `${sheets.length} sheet(s) written - ${notes.join("; ")}. gui.json: ` +
+      `+${result.added.length} added, ${result.corrected.length} corrected, ` +
+      `${result.skipped.length} already present.`;
   }
 
   function scaffoldInput(): ScaffoldInput {
@@ -1554,12 +1738,30 @@
     return {
       packageName: `it.meridian.${project.module}.gui`,
       className,
-      base: { constant: "MAIN", codepoint: parseCodepoint(project.codepoint), advance: baked.advance },
-      overlays: [],
-      hotspots: project.hotspots.map((hotspot) => ({
-        constant: `${hotspot.id.replace(/\W/g, "_").toUpperCase()}_SLOTS`,
-        slots: hotspot.slots,
+      base: {
+        constant: "MAIN",
+        codepoint: parseCodepoint(project.codepoint),
+        advance: screenBake.base.advance,
+      },
+      overlays: screenBake.overlays.map((entry) => ({
+        constant: overlayConstant(entry.overlay.id),
+        codepoint: parseCodepoint(entry.overlay.codepoint),
+        advance: entry.bake.advance,
       })),
+      // A state's slot groups are named after the state, so two states can both have a
+      // "confirm" group without one quietly becoming the other.
+      hotspots: [
+        ...project.hotspots.map((hotspot) => ({
+          constant: `${hotspot.id.replace(/\W/g, "_").toUpperCase()}_SLOTS`,
+          slots: hotspot.slots,
+        })),
+        ...(project.overlays ?? []).flatMap((overlay) =>
+          overlay.hotspots.map((hotspot) => ({
+            constant: `${overlayConstant(overlay.id)}_${hotspot.id.replace(/\W/g, "_").toUpperCase()}_SLOTS`,
+            slots: hotspot.slots,
+          })),
+        ),
+      ],
       shiftConfigKey: `${project.module}.gui.${project.screenKey}-title-shift`,
     };
   }
@@ -1708,11 +1910,100 @@
 
       <section class="card">
         <div class="card-head">
-          <span class="label-mono">Layers</span>
-          <span class="count">{project.elements.length}</span>
+          <span class="label-mono">States</span>
+          <span class="count">{1 + (project.overlays ?? []).length}</span>
         </div>
         <ul class="list">
-          {#each project.elements as element}
+          <li class="layer-row">
+            <button
+              class="row-btn"
+              class:active={activeLayer === null}
+              onclick={() => selectLayer(null)}
+            >
+              <span class="truncate">Base screen</span>
+              <span class="trail">{project.codepoint}</span>
+            </button>
+          </li>
+          {#each project.overlays ?? [] as overlay}
+            <li class="layer-row">
+              <button
+                class="row-btn"
+                class:active={activeLayer === overlay.id}
+                class:muted={!shownOverlayIds.has(overlay.id)}
+                onclick={() => selectLayer(overlay.id)}
+              >
+                <span class="truncate">{overlay.name}</span>
+                <span class="trail">{overlay.elements.length}</span>
+              </button>
+              <div class="layer-tools">
+                <button
+                  class="icon"
+                  class:on={shownOverlayIds.has(overlay.id)}
+                  title="Show this state in the preview"
+                  aria-label={`preview ${overlay.name}`}
+                  onclick={() => togglePreviewLayer(overlay.id)}
+                >{shownOverlayIds.has(overlay.id) ? "\u25CF" : "\u25CB"}</button>
+                <button
+                  class="icon"
+                  title="Earlier in the title"
+                  aria-label="move state up"
+                  onclick={() => moveState(overlay.id, -1)}
+                >&#x25B2;</button>
+                <button
+                  class="icon"
+                  title="Later in the title"
+                  aria-label="move state down"
+                  onclick={() => moveState(overlay.id, 1)}
+                >&#x25BC;</button>
+                <button
+                  class="icon"
+                  title="Duplicate this state"
+                  aria-label={`duplicate ${overlay.name}`}
+                  onclick={() => duplicateState(overlay)}
+                >&#x29C9;</button>
+                <button
+                  class="icon danger"
+                  aria-label={`delete ${overlay.name}`}
+                  title="Delete this state"
+                  onclick={() => removeState(overlay)}
+                >&times;</button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+
+        {#if layer}
+          <div class="grid2 top">
+            <label class="field"><span>name</span>
+              <input value={layer.name} oninput={(event) => { layer!.name = (event.target as HTMLInputElement).value; touch(); }} />
+            </label>
+            <label class="field"><span>codepoint</span>
+              <input value={layer.codepoint} oninput={(event) => { layer!.codepoint = (event.target as HTMLInputElement).value; touch(); }} />
+            </label>
+          </div>
+          <label class="field top"><span>texture</span>
+            <input value={layer.textureFile} oninput={(event) => { layer!.textureFile = (event.target as HTMLInputElement).value; touch(); }} />
+          </label>
+          <p class="hint">
+            Java constant <code>{overlayConstant(layer.id)}</code>. The id never follows
+            the name: it is what the constant and the file are called.
+          </p>
+        {:else}
+          <p class="hint">
+            A state is a second sheet drawn over this one, with its own codepoint. The
+            base is not copied into it - transparent pixels are the base showing through.
+          </p>
+        {/if}
+        <button class="btn block sm" onclick={addState}>+ State</button>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">{layer ? `Layers in ${layer.name}` : "Layers"}</span>
+          <span class="count">{elements.length}</span>
+        </div>
+        <ul class="list">
+          {#each elements as element}
             <li class="layer-row">
               <input type="checkbox" checked={checked.has(element.id)} onchange={() => toggleChecked(element.id)} />
               <button
@@ -1756,11 +2047,11 @@
               </div>
             </li>
           {/each}
-          {#if project.elements.length === 0}
+          {#if elements.length === 0}
             <li class="hint">Pick button or infobox, then tap the grid — each tap grows the piece.</li>
           {/if}
         </ul>
-        {#if project.elements.length > 0}
+        {#if elements.length > 0}
           <p class="hint">A ticked layer joins the next saved component.</p>
         {/if}
       </section>
@@ -1768,10 +2059,10 @@
       <section class="card">
         <div class="card-head">
           <span class="label-mono">Hotspots</span>
-          <span class="count">{project.hotspots.length}</span>
+          <span class="count">{hotspots.length}</span>
         </div>
         <ul class="list">
-          {#each project.hotspots as hotspot}
+          {#each hotspots as hotspot}
             <li class="hotspot-row">
               <button
                 class="row-btn"

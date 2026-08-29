@@ -259,6 +259,8 @@
     packRoot={pack.root}
     fontPath={pack.profile.paths.fontDir + "/gui.json"}
     packPalette={pack.profile.palette ?? []}
+    suggestCodepoint={() =>
+      formatCodepoint(nextFree(pack!.registry, { module: "state", first: 0xe8e0, last: 0xf8ff }) ?? 0xe8e0)}
     {fonts}
     {infoboxSkin}
     {panelSkin}
