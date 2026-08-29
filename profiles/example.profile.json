@@ -4,13 +4,18 @@
   "paths": {
     "fontDir": "pack/assets/minecraft/font",
     "guiFont": "gui.json",
-    "textureRoots": ["pack"]
+    "textureRoots": [
+      "pack"
+    ]
   },
   "geometry": {
     "sheetCanvas": 256,
     "windowWidth": 176,
     "cell": 18,
-    "gridOrigin": [8, 18],
+    "gridOrigin": [
+      8,
+      18
+    ],
     "sheetToWindowY": 13,
     "defaultShift": -8
   },
@@ -20,6 +25,29 @@
     "maxPower": 6
   },
   "codepointRanges": [
-    { "module": "example", "range": ["U+E800", "U+E8FF"] }
+    {
+      "module": "example",
+      "range": [
+        "U+E800",
+        "U+E8FF"
+      ]
+    }
+  ],
+  "palette": [
+    {
+      "id": "panel",
+      "name": "Vanilla panel",
+      "hex": "#C6C6C6"
+    },
+    {
+      "id": "well",
+      "name": "Slot well",
+      "hex": "#8B8B8B"
+    },
+    {
+      "id": "accent",
+      "name": "Accent",
+      "hex": "#4A78D0"
+    }
   ]
 }

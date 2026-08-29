@@ -13,6 +13,15 @@
   import { CELL, COLS, GRID_X, GRID_Y, WINDOW_W, hotbarY, playerInvY, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
   import { commit, createStack, redo, undo } from "../engine/history";
   import { scaffoldFiles, advanceTable, type ScaffoldInput } from "../engine/javaScaffold";
+  import {
+    contrastRatio,
+    extractPalette,
+    freeSwatchId,
+    resolveColour,
+    toHex,
+    type Swatch,
+  } from "../engine/palette";
+  import { hueShiftedBevels } from "../engine/paint";
   import { encodePng } from "../engine/png";
   import { serializeProject, type Element, type Project } from "../engine/project";
   import type { Raster } from "../engine/raster";
@@ -26,6 +35,7 @@
   import { joinPath, type FsBackend } from "../platform/fs";
   import { pickFile } from "../platform/pick";
   import { rconExec } from "../platform/rcon";
+  import ColorField from "./ColorField.svelte";
   import { decodeTexture, deleteComponent, listComponents, loadSpriteRaster, saveComponent } from "./model";
 
   // The canvas margin grows with the space above the window (ascent − 13), so a GUI
@@ -61,6 +71,7 @@
     fonts,
     infoboxSkin,
     panelSkin,
+    packPalette,
     onExit,
   }: {
     project: Project;
@@ -71,6 +82,8 @@
     fonts: { minecraft?: BitmapFont; mono5?: BitmapFont };
     infoboxSkin?: { raster: Raster; border: number };
     panelSkin?: { raster: Raster; border: number };
+    /** The pack's named colours, from the profile. The project's own come first. */
+    packPalette: Swatch[];
     onExit: () => void;
   } = $props();
 
@@ -109,6 +122,13 @@
   let showSlotNumbers = $state(false);
   let clipboard: Element[] = [];
 
+  /**
+   * The composed screen as last drawn, kept so the eyedropper reads the artwork and not
+   * the chrome painted over it — a pick on a selected element must not return red.
+   */
+  let composed: Raster | null = null;
+  let eyedropper: ((hex: string) => void) | null = $state(null);
+
   let library: LibraryComponent[] = $state([]);
   let pendingComponent: LibraryComponent | null = $state(null);
   let spriteRasters = $state(new Map<string, Raster>());
@@ -131,9 +151,29 @@
   let rconPort = $state(25575);
   let rconPassword = $state("");
 
-  const context = $derived<RenderContext>({ fonts, sprites: spriteRasters, infoboxSkin, panelSkin });
+  const palette = $derived([...(project.palette ?? []), ...packPalette]);
+  const context = $derived<RenderContext>({
+    fonts,
+    sprites: spriteRasters,
+    infoboxSkin,
+    panelSkin,
+    palette: packPalette,
+  });
   const baked = $derived(bakeSheet(project, background, context));
   const selected = $derived(project.elements.find((element) => element.id === selectedId) ?? null);
+  const fillHex = $derived(resolveColour(selected?.color, palette, "#C6C6C6") ?? "#C6C6C6");
+  const textHex = $derived(resolveColour(selected?.textColor, palette, "#FFFFFF") ?? "#FFFFFF");
+  const bevelPreview = $derived(hueShiftedBevels(rgbaOf(fillHex)));
+  const textContrast = $derived(contrastRatio(textHex, fillHex));
+
+  function rgbaOf(hex: string): [number, number, number, number] {
+    const value = Number.parseInt(hex.slice(1), 16);
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255, 255];
+  }
+
+  const rgbaCss = (colour: readonly number[]): string =>
+    `rgb(${colour[0]}, ${colour[1]}, ${colour[2]})`;
+
   const hasText = $derived(
     selected != null && ["button", "text", "infobox", "tiles", "panel"].includes(selected.kind),
   );
@@ -393,6 +433,8 @@
       holes: new Set(project.holes ?? []),
     });
 
+    composed = raster;
+
     const offscreen = document.createElement("canvas");
     offscreen.width = raster.width;
     offscreen.height = raster.height;
@@ -532,6 +574,23 @@
       x: Math.floor((event.clientX - bounds.left) / zoom) - PAD,
       y: Math.floor((event.clientY - bounds.top) / zoom) - PAD,
     };
+  }
+
+  /** Arms the eyedropper: the next tap on the canvas answers into this field. */
+  function armEyedropper(apply: (hex: string) => void): void {
+    eyedropper = apply;
+    statusLine = "tap the artwork to pick a colour";
+  }
+
+  /** The colour of one pixel of the drawn screen, or null where it is transparent. */
+  function pixelAt(x: number, y: number): string | null {
+    if (!composed) return null;
+    const px = x + PAD;
+    const py = y + PAD;
+    if (px < 0 || py < 0 || px >= composed.width || py >= composed.height) return null;
+    const index = (py * composed.width + px) * 4;
+    if (composed.data[index + 3]! < 8) return null;
+    return toHex(composed.data[index]!, composed.data[index + 1]!, composed.data[index + 2]!);
   }
 
   function snapSlot(x: number, y: number): { x: number; y: number } {
@@ -698,6 +757,18 @@
 
   function onPointerDown(event: PointerEvent): void {
     const point = windowPoint(event);
+
+    if (eyedropper) {
+      const hex = pixelAt(point.x, point.y);
+      if (hex) {
+        eyedropper(hex);
+        statusLine = `picked ${hex}`;
+      } else {
+        statusLine = "nothing but transparency there";
+      }
+      eyedropper = null;
+      return;
+    }
 
     if (pendingComponent) {
       const placed = instantiate(
@@ -971,6 +1042,46 @@
     selectedId = copies[0]!.id;
     checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
     statusLine = `${copies.length} layer(s) duplicated`;
+  }
+
+  /** Adds a colour to the project's own palette and returns the reference to it. */
+  function addSwatch(hex: string, name?: string): string {
+    const id = freeSwatchId(name ?? hex.replace("#", "c"), palette);
+    project = {
+      ...project,
+      palette: [...(project.palette ?? []), { id, name: name ?? hex, hex: hex.toUpperCase() }],
+    };
+    return `@${id}`;
+  }
+
+  function removeSwatch(id: string): void {
+    project = { ...project, palette: (project.palette ?? []).filter((entry) => entry.id !== id) };
+    statusLine = `@${id} removed - screens naming it fall back to the plain plate`;
+  }
+
+  /** Copies one of the pack's colours into the project so it can be edited here. */
+  function adoptSwatch(entry: Swatch): void {
+    if ((project.palette ?? []).some((candidate) => candidate.id === entry.id)) return;
+    project = { ...project, palette: [...(project.palette ?? []), { ...entry }] };
+  }
+
+  /**
+   * Lifts a palette off the picture underneath — the imported reference if there is one,
+   * else the screen as drawn. Beats typing hexes out of an art brief.
+   */
+  function samplePalette(): void {
+    const source = reference ?? composed;
+    if (!source) {
+      statusLine = "nothing to sample from";
+      return;
+    }
+    const sampled = extractPalette(source, 8);
+    const existing = project.palette ?? [];
+    const fresh = sampled
+      .filter((entry) => !existing.some((candidate) => candidate.hex === entry.hex))
+      .map((entry) => ({ ...entry, id: freeSwatchId(entry.hex.replace("#", "c"), existing) }));
+    project = { ...project, palette: [...existing, ...fresh] };
+    statusLine = `${fresh.length} colour(s) sampled`;
   }
 
   const CLIPBOARD_KIND = "slotify/elements@1";
@@ -1515,9 +1626,26 @@
                 <input value={line} oninput={(event) => setLine(index, (event.target as HTMLInputElement).value)} />
                 <input
                   type="color"
-                  value={selected.lineColors?.[index] ?? selected.textColor ?? "#E6E2DA"}
+                  value={resolveColour(
+                    selected.lineColors?.[index] ?? selected.textColor,
+                    palette,
+                    "#E6E2DA",
+                  )}
                   oninput={(event) => setLineColor(index, (event.target as HTMLInputElement).value.toUpperCase())}
                 />
+                {#if palette.length > 0}
+                  <select
+                    class="line-swatch"
+                    title="Use a palette colour for this line"
+                    value={(selected.lineColors?.[index] ?? "").startsWith("@") ? selected.lineColors![index] : ""}
+                    onchange={(event) => setLineColor(index, (event.target as HTMLSelectElement).value)}
+                  >
+                    <option value="">-</option>
+                    {#each palette as entry}
+                      <option value={`@${entry.id}`}>{entry.name}</option>
+                    {/each}
+                  </select>
+                {/if}
                 <button class="btn sm danger" onclick={() => removeLine(index)} aria-label="remove line">×</button>
               </div>
             {/each}
@@ -1555,12 +1683,38 @@
             </div>
           {/if}
 
-          <div class="grid2 top">
+          <div class="colours top">
             {#if !["text", "sprite", "slot"].includes(selected.kind) && !(selected.kind === "tiles" && selected.tileKind === "infobox") && selected.kind !== "infobox"}
-              <label class="field"><span>fill</span><input type="color" value={selected.color ?? "#C6C6C6"} oninput={(event) => { selected!.color = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+              <ColorField
+                label="fill"
+                value={selected.color}
+                fallback="#C6C6C6"
+                {palette}
+                onchange={(next) => { selected!.color = next; touch(); }}
+                oneyedrop={() => armEyedropper((hex) => { selected!.color = hex; touch(); })}
+              />
+              <div class="bevels" title="What the fill turns into: highlight, shadow, edge">
+                <span class="label-mono">bevels</span>
+                <span class="bevel" style:background={rgbaCss(bevelPreview.light)}></span>
+                <span class="bevel" style:background={rgbaCss(bevelPreview.dark)}></span>
+                <span class="bevel" style:background={rgbaCss(bevelPreview.edge)}></span>
+              </div>
             {/if}
             {#if hasText}
-              <label class="field"><span>text</span><input type="color" value={selected.textColor ?? "#FFFFFF"} oninput={(event) => { selected!.textColor = (event.target as HTMLInputElement).value.toUpperCase(); touch(); }} /></label>
+              <ColorField
+                label="text"
+                value={selected.textColor}
+                fallback="#FFFFFF"
+                {palette}
+                onchange={(next) => { selected!.textColor = next; touch(); }}
+                oneyedrop={() => armEyedropper((hex) => { selected!.textColor = hex; touch(); })}
+              />
+              {#if selected.color && textContrast < 3}
+                <p class="hint bad">
+                  Contrast {textContrast.toFixed(1)}:1 against the fill - at this size the
+                  label will not read.
+                </p>
+              {/if}
             {/if}
           </div>
 
@@ -1591,6 +1745,68 @@
           <p>Nothing selected. Pick a tool and tap the grid, or tap a layer.</p>
         </div>
       {/if}
+
+      <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Palette</span>
+          <span class="count">{palette.length}</span>
+        </div>
+        {#if (project.palette ?? []).length > 0}
+          <ul class="list">
+            {#each project.palette ?? [] as entry, index}
+              <li class="swatch-row">
+                <input
+                  type="color"
+                  value={entry.hex}
+                  oninput={(event) => {
+                    const entries = [...(project.palette ?? [])];
+                    entries[index] = { ...entry, hex: (event.target as HTMLInputElement).value.toUpperCase() };
+                    project = { ...project, palette: entries };
+                  }}
+                />
+                <input
+                  class="swatch-name"
+                  value={entry.name}
+                  oninput={(event) => {
+                    const entries = [...(project.palette ?? [])];
+                    entries[index] = { ...entry, name: (event.target as HTMLInputElement).value };
+                    project = { ...project, palette: entries };
+                  }}
+                />
+                <code class="swatch-id">@{entry.id}</code>
+                <button class="btn sm danger" aria-label={`remove ${entry.name}`} onclick={() => removeSwatch(entry.id)}
+                  >&times;</button
+                >
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="hint">
+            No colour named here yet. A named colour is stored as <code>@id</code>, so
+            moving the swatch moves every screen that used it.
+          </p>
+        {/if}
+
+        {#if packPalette.length > 0}
+          <p class="hint top">From the pack - tap to make it editable here:</p>
+          <div class="swatches">
+            {#each packPalette as entry}
+              <button
+                class="chipswatch"
+                style:background={entry.hex}
+                title={`${entry.name} (@${entry.id})`}
+                aria-label={entry.name}
+                onclick={() => adoptSwatch(entry)}
+              ></button>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="row2">
+          <button class="btn sm" onclick={() => addSwatch(fillHex)}>+ current fill</button>
+          <button class="btn sm" onclick={samplePalette}>Sample art</button>
+        </div>
+      </section>
 
       <section class="card">
         <div class="card-head">
@@ -1757,6 +1973,72 @@
   .stage,
   .stage canvas {
     touch-action: none;
+  }
+
+  /* Colour fields stack: each one carries its own swatch strip under it. */
+  .colours {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .bevels {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+  }
+
+  .bevel {
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+  }
+
+  .swatch-row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .swatch-row input[type="color"] {
+    flex: 0 0 28px;
+  }
+
+  .swatch-name {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .swatch-id {
+    flex: 0 0 auto;
+    max-width: 5.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    color: var(--ink-soft);
+  }
+
+  .swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem;
+  }
+
+  .chipswatch {
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .line-swatch {
+    flex: 0 0 3.2rem;
+    min-width: 0;
   }
 
   /* The screen's identity in the top bar, where a document title belongs. */

@@ -258,6 +258,7 @@
     {backend}
     packRoot={pack.root}
     fontPath={pack.profile.paths.fontDir + "/gui.json"}
+    packPalette={pack.profile.palette ?? []}
     {fonts}
     {infoboxSkin}
     {panelSkin}

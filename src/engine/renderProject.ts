@@ -15,6 +15,7 @@ import {
   type BevelSet,
   type RGBA,
 } from "./paint";
+import { resolveColour, type Swatch } from "./palette";
 import { advanceOf, blit, makeRaster, scaleRaster, stripIsolated, type Raster } from "./raster";
 import type { Element, Project } from "./project";
 import { drawTileRegion, regionBBox, type TileCell } from "./tiles";
@@ -43,6 +44,32 @@ export interface RenderContext {
   infoboxSkin?: { raster: Raster; border: number };
   /** The profile's panel/title-box texture (NEXT: boxtitolo), same treatment. */
   panelSkin?: { raster: Raster; border: number };
+  /** The pack's named colours. The project's own palette is consulted first. */
+  palette?: Swatch[];
+}
+
+/**
+ * An element with every `@name` turned into the hex it stands for, which is all the
+ * drawing code below ever sees. A reference nothing defines resolves to nothing, so the
+ * element falls back to its default colour instead of failing to draw.
+ */
+export function resolveElementColours(element: Element, palette: readonly Swatch[]): Element {
+  const named = (value: string | null | undefined): boolean =>
+    typeof value === "string" && value.startsWith("@");
+  const anyNamed =
+    named(element.color) ||
+    named(element.textColor) ||
+    named(element.borderColor) ||
+    (element.lineColors ?? []).some(named);
+  if (!anyNamed) return element;
+
+  return {
+    ...element,
+    color: resolveColour(element.color, palette),
+    textColor: resolveColour(element.textColor, palette),
+    borderColor: resolveColour(element.borderColor, palette),
+    lineColors: element.lineColors?.map((colour) => resolveColour(colour ?? undefined, palette) ?? null),
+  };
 }
 
 // Fallback infobox palette, measured from the NEXT template PNG — used only when the
@@ -267,7 +294,11 @@ export function renderSheet(project: Project, background?: Raster, context: Rend
   }
 
   if (background) blit(sheet, background, 0, 0);
-  for (const element of project.elements) drawElement(sheet, element, dy, context);
+  // The project's palette shadows the pack's: same id, the screen's own value wins.
+  const palette = [...(project.palette ?? []), ...(context.palette ?? [])];
+  for (const element of project.elements) {
+    drawElement(sheet, resolveElementColours(element, palette), dy, context);
+  }
 
   return sheet;
 }

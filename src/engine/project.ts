@@ -11,6 +11,19 @@ import { z } from "zod";
  */
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
+/**
+ * Either a literal or a reference into the palette. `@brand.red` keeps the decision in
+ * one place: change the swatch and every screen that named it changes at the next
+ * export, without anybody reopening them.
+ */
+const COLOUR = /^(#[0-9a-fA-F]{6}|@[A-Za-z0-9._-]+)$/;
+
+export const SwatchSchema = z.object({
+  /** Referenced as `@id`. */
+  id: z.string().regex(/^[A-Za-z0-9._-]+$/),
+  name: z.string().min(1),
+  hex: z.string().regex(HEX),
+});
 
 export const ShadowDirSchema = z.enum([
   "none",
@@ -40,16 +53,16 @@ export const ElementSchema = z.object({
   /** Buttons only: drawn pressed-in instead of raised. */
   pressed: z.boolean().optional(),
   /** Fill tint for button/panel/well/tiles, background override for infobox. */
-  color: z.string().regex(HEX).optional(),
+  color: z.string().regex(COLOUR).optional(),
   /** Button/text/tile-button label. One line. */
   label: z.string().optional(),
-  textColor: z.string().regex(HEX).optional(),
+  textColor: z.string().regex(COLOUR).optional(),
   /** Infobox body, one string per line. */
   lines: z.array(z.string()).optional(),
   /** Per-line colours, aligned with `lines`; null falls back to textColor. */
-  lineColors: z.array(z.string().regex(HEX).nullable()).optional(),
+  lineColors: z.array(z.string().regex(COLOUR).nullable()).optional(),
   /** Infobox border override (procedural fallback only — the skin wins when loaded). */
-  borderColor: z.string().regex(HEX).optional(),
+  borderColor: z.string().regex(COLOUR).optional(),
   /** Sprite elements: id of the library component whose PNG this draws. */
   sprite: z.string().optional(),
   /** Text shadow for label/text/infobox lines. Default none. */
@@ -92,6 +105,11 @@ export const ProjectSchema = z.object({
   textureFile: z.string().min(1),
   /** An imported sheet drawn under the elements, locked; resolved via the pack. */
   background: z.object({ textureFile: z.string().min(1) }).optional(),
+  /**
+   * Colours this screen names for itself. Looked up before the profile's palette, so a
+   * screen can carry a colour the pack has not adopted yet without editing the pack.
+   */
+  palette: z.array(SwatchSchema).optional(),
   elements: z.array(ElementSchema),
   hotspots: z.array(HotspotSchema),
   /** Container slots (raw index) removed from the drawn grid. */
@@ -112,6 +130,7 @@ export const ProjectSchema = z.object({
 
 export type Element = z.infer<typeof ElementSchema>;
 export type Hotspot = z.infer<typeof HotspotSchema>;
+export type Swatch = z.infer<typeof SwatchSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
 
 export function newProject(module: string, screenKey: string, codepoint: string): Project {

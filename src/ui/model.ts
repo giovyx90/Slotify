@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { parseComponent, serializeComponent, type LibraryComponent } from "../engine/components";
+import type { Swatch } from "../engine/palette";
 import { cropToOpaque } from "../engine/ninepatch";
 import { parseFont, type ParsedBitmap, type ParsedFont } from "../engine/fontJson";
 import { decodePng } from "../engine/png";
@@ -35,6 +36,8 @@ export interface Profile {
     panelSkinBorder?: number;
   };
   codepointRanges?: { module: string; range: [string, string] }[];
+  /** The pack's named colours, offered in every colour field and referenced as `@id`. */
+  palette?: Swatch[];
 }
 
 export interface ScreenEntry {
