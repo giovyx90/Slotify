@@ -567,6 +567,11 @@
 
   function applySnapshot(text: string): void {
     project = JSON.parse(text) as Project;
+    // The decoded pixels have to go with it. They are the live copy a stroke mutated in
+    // place, and both the renderer and rasterFor prefer the cache over the element — so
+    // leaving it behind makes undo look like it did nothing, right up until it walks
+    // back past the layer's creation and the whole drawing vanishes at once.
+    paintRasters = new Map();
     if (selectedId && !elements.some((element) => element.id === selectedId)) selectedId = null;
     checked = new Set([...checked].filter((id) => elements.some((element) => element.id === id)));
     syncHistory();
