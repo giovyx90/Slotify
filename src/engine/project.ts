@@ -62,6 +62,10 @@ export const ElementSchema = z.object({
   cells: z.array(TileCellSchema).optional(),
   /** Vertical gap between infobox/text lines, pixels. */
   lineGap: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional(),
+  /** Not drawn, and therefore not exported. The layer list keeps it in reach. */
+  hidden: z.boolean().optional(),
+  /** Ignored by clicks on the canvas: a big panel stops swallowing what sits on it. */
+  locked: z.boolean().optional(),
   /** Integer pixel scale for label/text/lines. The NEXT infobox standard is 2×. */
   textScale: z.union([z.literal(1), z.literal(2)]).optional(),
 });

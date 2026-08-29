@@ -164,6 +164,10 @@ function drawInfoboxLines(
 }
 
 function drawElement(sheet: Raster, element: Element, dy: number, context: RenderContext): void {
+  // Hiding a layer hides it everywhere, the export included. The alternative — a layer
+  // invisible in the editor and present in the shipped sheet — is how you send art with
+  // a piece in it nobody has looked at for a week.
+  if (element.hidden) return;
   const x = element.x;
   const y = element.y + dy;
   const font = fontFor(element, context);

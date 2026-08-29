@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { align, boundingBox, distribute, type AlignMode, type Axis } from "../engine/align";
   import { regionKeyAt, regionRect } from "../engine/carve";
   import { renderScreen } from "../engine/chestRenderer";
   import {
@@ -9,7 +10,8 @@
     type LibraryComponent,
   } from "../engine/components";
   import { buildDeployPlan } from "../engine/deploy";
-  import { CELL, COLS, GRID_X, GRID_Y, hotbarY, playerInvY, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
+  import { CELL, COLS, GRID_X, GRID_Y, WINDOW_W, hotbarY, playerInvY, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
+  import { commit, createStack, redo, undo } from "../engine/history";
   import { scaffoldFiles, advanceTable, type ScaffoldInput } from "../engine/javaScaffold";
   import { encodePng } from "../engine/png";
   import { serializeProject, type Element, type Project } from "../engine/project";
@@ -73,6 +75,10 @@
   } = $props();
 
   type Tool = "select" | "button" | "infobox" | "slot" | "erase" | "cover" | "text" | "panel" | "well" | "hotspot";
+  /** Also the digit shortcuts, in this order: 1 selects, 2 draws a button, and so on. */
+  const TOOLS: Tool[] = [
+    "select", "button", "infobox", "slot", "erase", "cover", "text", "panel", "well", "hotspot",
+  ];
   let tool: Tool = $state("select");
   let selectedId: string | null = $state(null);
   let checked = $state(new Set<string>());
@@ -83,7 +89,25 @@
 
   let canvas: HTMLCanvasElement | undefined = $state();
   let nextIdCounter = $state(1);
-  let drag: { id: string; startX: number; startY: number; elX: number; elY: number } | null = null;
+
+  /** The eight corners and edges of the selection box, as a drag can grab them. */
+  type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+  const RESIZABLE = ["button", "panel", "well", "infobox"];
+  type DragState =
+    | {
+        kind: "move";
+        ids: string[];
+        startX: number;
+        startY: number;
+        origins: Map<string, { x: number; y: number }>;
+      }
+    | { kind: "resize"; id: string; handle: Handle; x: number; y: number; w: number; h: number };
+  let drag: DragState | null = null;
+
+  /** Where the pointer is over the artwork, in window pixels — shown in the top bar. */
+  let cursor: { x: number; y: number } | null = $state(null);
+  let showSlotNumbers = $state(false);
+  let clipboard: Element[] = [];
 
   let library: LibraryComponent[] = $state([]);
   let pendingComponent: LibraryComponent | null = $state(null);
@@ -120,6 +144,198 @@
 
   function touch(): void {
     project = { ...project };
+  }
+
+  /*
+   * Undo, without a hook on every mutation.
+   *
+   * Half the edits in here never pass through a function: `bind:value` on the x field
+   * writes `selected.x` and nobody is told. So instead of recording commands, an effect
+   * watches the serialised project and records a snapshot once it has settled. The delay
+   * is what turns a drag of forty pointermoves, or a typed label, into one undo step.
+   *
+   * The stack is deliberately a plain object, not `$state`: reading it inside the effect
+   * would make the effect depend on it and record its own writes forever.
+   */
+  const HISTORY_SETTLE_MS = 320;
+  let historyStack = createStack(JSON.stringify(project));
+  let historyTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Mirrors of the stack's depths — the stack itself is not reactive on purpose. */
+  let undoDepth = $state(0);
+  let redoDepth = $state(0);
+
+  function syncHistory(): void {
+    undoDepth = historyStack.past.length;
+    redoDepth = historyStack.future.length;
+  }
+
+  $effect(() => {
+    const text = JSON.stringify(project);
+    if (text === historyStack.present) return;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(flushHistory, HISTORY_SETTLE_MS);
+  });
+
+  $effect(() => () => {
+    if (historyTimer) clearTimeout(historyTimer);
+  });
+
+  /**
+   * The keyboard. Everything is ignored while a field has the focus — in a text box
+   * ctrl+Z belongs to the box, and the arrows belong to the caret.
+   */
+  $effect(() => {
+    const inField = (target: EventTarget | null): boolean =>
+      target instanceof HTMLElement &&
+      (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable);
+
+    const onKey = (event: KeyboardEvent): void => {
+      if (inField(event.target)) return;
+      const step = event.shiftKey ? CELL : 1;
+
+      if (event.ctrlKey || event.metaKey) {
+        switch (event.key.toLowerCase()) {
+          case "z":
+            event.preventDefault();
+            if (event.shiftKey) redoStep();
+            else undoStep();
+            return;
+          case "y":
+            event.preventDefault();
+            redoStep();
+            return;
+          case "s":
+            event.preventDefault();
+            void saveProject();
+            return;
+          case "d":
+            event.preventDefault();
+            duplicateSelection();
+            return;
+          case "c":
+            event.preventDefault();
+            void copySelection();
+            return;
+          case "v":
+            event.preventDefault();
+            void pasteClipboard();
+            return;
+          case "a":
+            event.preventDefault();
+            checked = new Set(project.elements.map((element) => element.id));
+            statusLine = `${checked.size} layer(s) ticked`;
+            return;
+          default:
+            return;
+        }
+      }
+
+      switch (event.key) {
+        case "ArrowLeft":
+          event.preventDefault();
+          nudge(-step, 0);
+          return;
+        case "ArrowRight":
+          event.preventDefault();
+          nudge(step, 0);
+          return;
+        case "ArrowUp":
+          event.preventDefault();
+          nudge(0, -step);
+          return;
+        case "ArrowDown":
+          event.preventDefault();
+          nudge(0, step);
+          return;
+        case "Delete":
+        case "Backspace":
+          event.preventDefault();
+          removeSelected();
+          return;
+        case "Escape":
+          tool = "select";
+          pendingComponent = null;
+          selectedId = null;
+          checked = new Set();
+          return;
+        case "+":
+        case "=":
+          zoom = Math.min(8, zoom + 1);
+          return;
+        case "-":
+          zoom = Math.max(1, zoom - 1);
+          return;
+        case "g":
+          guides = !guides;
+          return;
+        case "n":
+          showSlotNumbers = !showSlotNumbers;
+          return;
+      }
+
+      // 1..9 then 0 pick a tool, in the order the palette shows them.
+      if (/^[0-9]$/.test(event.key)) {
+        const index = event.key === "0" ? 9 : Number(event.key) - 1;
+        const picked = TOOLS[index];
+        if (picked) {
+          tool = picked;
+          pendingComponent = null;
+        }
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  /** Wheel zoom, kept off the passive path so the page underneath does not scroll. */
+  $effect(() => {
+    const element = canvas;
+    if (!element) return;
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault();
+      zoom = Math.min(8, Math.max(1, zoom + (event.deltaY < 0 ? 1 : -1)));
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  });
+
+  /** Records whatever is pending right now — before an undo, and before leaving. */
+  function flushHistory(): void {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (commit(historyStack, JSON.stringify(project))) syncHistory();
+  }
+
+  function applySnapshot(text: string): void {
+    project = JSON.parse(text) as Project;
+    if (selectedId && !project.elements.some((element) => element.id === selectedId)) selectedId = null;
+    checked = new Set([...checked].filter((id) => project.elements.some((element) => element.id === id)));
+    syncHistory();
+    void ensureSprites(project.elements);
+  }
+
+  function undoStep(): void {
+    flushHistory();
+    const previous = undo(historyStack);
+    if (previous === null) {
+      statusLine = "nothing left to undo";
+      return;
+    }
+    applySnapshot(previous);
+    statusLine = `undone - ${historyStack.past.length} step(s) further back`;
+  }
+
+  function redoStep(): void {
+    const next = redo(historyStack);
+    if (next === null) {
+      statusLine = "nothing to redo";
+      return;
+    }
+    applySnapshot(next);
+    statusLine = `redone - ${historyStack.future.length} step(s) further forward`;
   }
 
   async function refreshLibrary(): Promise<void> {
@@ -272,8 +488,41 @@
       if (element) stroke(element.x - 1, element.y - 1, element.w + 2, element.h + 2, OVERLAY.staged);
     }
 
+    if (showSlotNumbers) {
+      target.font = "600 9px ui-monospace, monospace";
+      target.textAlign = "center";
+      target.textBaseline = "middle";
+      for (let row = 0; row < project.rows; row++) {
+        for (let col = 0; col < COLS; col++) {
+          const rect = slotWindowRect(row, col);
+          const label = String(slotIndex(row, col));
+          const cx = (PAD + rect.x + rect.w / 2) * zoom;
+          const cy = (PAD + rect.y + rect.h / 2) * zoom;
+          target.fillStyle = "rgba(255,255,255,0.85)";
+          target.fillText(label, cx + 1, cy + 1);
+          target.fillStyle = "rgba(11,13,16,0.9)";
+          target.fillText(label, cx, cy);
+        }
+      }
+    }
+
     if (selected) {
       stroke(selected.x - 1, selected.y - 1, selected.w + 2, selected.h + 2, OVERLAY.selected, 2);
+      if (isResizable(selected)) drawHandles(target, selected);
+    }
+  }
+
+  /** The eight grips, drawn in screen pixels so they stay grabbable at zoom 1. */
+  function drawHandles(target: CanvasRenderingContext2D, element: Element): void {
+    const size = 7;
+    for (const point of handlePoints(element)) {
+      const cx = (PAD + point.x + 0.5) * zoom;
+      const cy = (PAD + point.y + 0.5) * zoom;
+      target.fillStyle = "#FFFFFF";
+      target.fillRect(cx - size / 2, cy - size / 2, size, size);
+      target.strokeStyle = OVERLAY.selected;
+      target.lineWidth = 1;
+      target.strokeRect(cx - size / 2 + 0.5, cy - size / 2 + 0.5, size - 1, size - 1);
     }
   }
 
@@ -294,9 +543,40 @@
   function hitElement(x: number, y: number): Element | null {
     for (let index = project.elements.length - 1; index >= 0; index--) {
       const element = project.elements[index]!;
+      if (element.locked || element.hidden) continue;
       if (x >= element.x && x < element.x + element.w && y >= element.y && y < element.y + element.h) {
         return element;
       }
+    }
+    return null;
+  }
+
+  /** The eight grab points of a box, in window pixels. */
+  function handlePoints(element: Element): { handle: Handle; x: number; y: number }[] {
+    const midX = element.x + (element.w >> 1);
+    const midY = element.y + (element.h >> 1);
+    const right = element.x + element.w - 1;
+    const bottom = element.y + element.h - 1;
+    return [
+      { handle: "nw", x: element.x, y: element.y },
+      { handle: "n", x: midX, y: element.y },
+      { handle: "ne", x: right, y: element.y },
+      { handle: "e", x: right, y: midY },
+      { handle: "se", x: right, y: bottom },
+      { handle: "s", x: midX, y: bottom },
+      { handle: "sw", x: element.x, y: bottom },
+      { handle: "w", x: element.x, y: midY },
+    ];
+  }
+
+  const isResizable = (element: Element | null): boolean =>
+    element != null && RESIZABLE.includes(element.kind) && !element.locked;
+
+  /** Which handle the pointer is on, with a target that stays finger-sized at any zoom. */
+  function handleAt(element: Element, x: number, y: number): Handle | null {
+    const tolerance = Math.max(2, Math.round(7 / zoom));
+    for (const point of handlePoints(element)) {
+      if (Math.abs(x - point.x) <= tolerance && Math.abs(y - point.y) <= tolerance) return point.handle;
     }
     return null;
   }
@@ -501,51 +781,298 @@
       return;
     }
 
+    // A handle on the current selection wins over whatever sits under the pointer:
+    // otherwise the corner of a button lying on a panel could never be grabbed.
+    if (isResizable(selected)) {
+      const handle = handleAt(selected!, point.x, point.y);
+      if (handle) {
+        flushHistory();
+        drag = {
+          kind: "resize",
+          id: selected!.id,
+          handle,
+          x: selected!.x,
+          y: selected!.y,
+          w: selected!.w,
+          h: selected!.h,
+        };
+        (event.target as HTMLElement).setPointerCapture(event.pointerId);
+        return;
+      }
+    }
+
     const hit = hitElement(point.x, point.y);
     selectedId = hit?.id ?? null;
     if (hit && hit.kind !== "tiles") {
-      drag = { id: hit.id, startX: point.x, startY: point.y, elX: hit.x, elY: hit.y };
+      // Dragging one of several ticked layers drags all of them: the tick list is the
+      // multi-selection, the same one the align buttons and a saved component read.
+      const ids =
+        checked.has(hit.id) && checked.size > 1
+          ? [...checked].filter((id) => {
+              const element = project.elements.find((candidate) => candidate.id === id);
+              return element != null && element.kind !== "tiles" && !element.locked;
+            })
+          : [hit.id];
+      flushHistory();
+      drag = {
+        kind: "move",
+        ids,
+        startX: point.x,
+        startY: point.y,
+        origins: new Map(
+          ids.map((id) => {
+            const element = project.elements.find((candidate) => candidate.id === id)!;
+            return [id, { x: element.x, y: element.y }];
+          }),
+        ),
+      };
       (event.target as HTMLElement).setPointerCapture(event.pointerId);
     }
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!drag) return;
     const point = windowPoint(event);
-    const element = project.elements.find((candidate) => candidate.id === drag!.id);
-    if (!element) return;
-    let x = drag.elX + point.x - drag.startX;
-    let y = drag.elY + point.y - drag.startY;
+    cursor = point;
+    if (!drag) return;
 
-    if (element.kind === "slot") {
-      ({ x, y } = snapSlot(x + 8, y + 8));
-    } else {
-      const others = project.elements
-        .filter((candidate) => candidate.id !== element.id)
-        .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
-      ({ x, y } = snapToEdges({ x, y, w: element.w, h: element.h }, others));
+    if (drag.kind === "resize") {
+      const element = project.elements.find((candidate) => candidate.id === drag!.id);
+      if (!element) return;
+      resizeTo(element, drag.handle, drag, point);
+      touch();
+      return;
     }
 
-    element.x = x;
-    element.y = y;
+    const dragging = drag;
+    const moved = dragging.ids
+      .map((id) => project.elements.find((candidate) => candidate.id === id))
+      .filter((element): element is Element => element != null);
+    if (moved.length === 0) return;
+
+    let dx = point.x - dragging.startX;
+    let dy = point.y - dragging.startY;
+
+    if (moved.length === 1) {
+      const element = moved[0]!;
+      const origin = dragging.origins.get(element.id)!;
+      let x = origin.x + dx;
+      let y = origin.y + dy;
+      if (element.kind === "slot") {
+        ({ x, y } = snapSlot(x + 8, y + 8));
+      } else {
+        const others = project.elements
+          .filter((candidate) => candidate.id !== element.id)
+          .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
+        ({ x, y } = snapToEdges({ x, y, w: element.w, h: element.h }, others));
+      }
+      element.x = x;
+      element.y = y;
+      touch();
+      return;
+    }
+
+    // A group snaps as one box, so the pieces keep the spacing they were given.
+    const boxes = moved.map((element) => {
+      const origin = dragging.origins.get(element.id)!;
+      return { x: origin.x + dx, y: origin.y + dy, w: element.w, h: element.h };
+    });
+    const group = boundingBox(boxes);
+    const others = project.elements
+      .filter((candidate) => !dragging.ids.includes(candidate.id))
+      .map((candidate) => ({ x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }));
+    const snapped = snapToEdges(group, others);
+    dx += snapped.x - group.x;
+    dy += snapped.y - group.y;
+
+    for (const element of moved) {
+      const origin = dragging.origins.get(element.id)!;
+      element.x = origin.x + dx;
+      element.y = origin.y + dy;
+    }
     touch();
   }
 
+  /** Drags one edge or corner; the opposite one stays put and nothing goes under 2px. */
+  function resizeTo(
+    element: Element,
+    handle: Handle,
+    start: { x: number; y: number; w: number; h: number },
+    point: { x: number; y: number },
+  ): void {
+    let left = start.x;
+    let top = start.y;
+    let right = start.x + start.w;
+    let bottom = start.y + start.h;
+
+    if (handle.includes("w")) left = Math.min(point.x, right - 2);
+    if (handle.includes("e")) right = Math.max(point.x + 1, left + 2);
+    if (handle.includes("n")) top = Math.min(point.y, bottom - 2);
+    if (handle.includes("s")) bottom = Math.max(point.y + 1, top + 2);
+
+    element.x = left;
+    element.y = top;
+    element.w = right - left;
+    element.h = bottom - top;
+  }
+
   function onPointerUp(): void {
+    if (drag) flushHistory();
     drag = null;
   }
 
+  /**
+   * What the commands act on: the ticked layers once there are two or more of them,
+   * otherwise whatever is selected. One rule for nudging, deleting, duplicating,
+   * aligning and dragging, so the tick boxes never mean two different things.
+   */
+  function selectionElements(): Element[] {
+    const ids = checked.size > 1 ? [...checked] : selectedId ? [selectedId] : [];
+    return ids
+      .map((id) => project.elements.find((element) => element.id === id))
+      .filter((element): element is Element => element != null);
+  }
+
+  /** Movable members of the selection: tiles live on the lattice, locks say no. */
+  function movableSelection(): Element[] {
+    return selectionElements().filter((element) => element.kind !== "tiles" && !element.locked);
+  }
+
   function nudge(dx: number, dy: number): void {
-    if (!selected || selected.kind === "tiles") return;
-    selected.x += dx;
-    selected.y += dy;
+    const targets = movableSelection();
+    if (targets.length === 0) return;
+    for (const element of targets) {
+      element.x += dx;
+      element.y += dy;
+    }
     touch();
   }
 
   function removeSelected(): void {
-    if (!selectedId) return;
-    project = { ...project, elements: project.elements.filter((element) => element.id !== selectedId) };
+    const ids = new Set(selectionElements().map((element) => element.id));
+    if (ids.size === 0) return;
+    project = { ...project, elements: project.elements.filter((element) => !ids.has(element.id)) };
     selectedId = null;
+    checked = new Set([...checked].filter((id) => !ids.has(id)));
+    statusLine = `${ids.size} layer(s) deleted`;
+  }
+
+  /** A copy two pixels down and right — far enough to grab, near enough to place. */
+  function duplicateSelection(): void {
+    const originals = selectionElements();
+    if (originals.length === 0) return;
+    const copies = originals.map((element) => ({
+      ...structuredClone($state.snapshot(element)),
+      id: nextId(),
+      x: element.x + 2,
+      y: element.y + 2,
+    })) as Element[];
+    project = { ...project, elements: [...project.elements, ...copies] };
+    void ensureSprites(copies);
+    selectedId = copies[0]!.id;
+    checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
+    statusLine = `${copies.length} layer(s) duplicated`;
+  }
+
+  const CLIPBOARD_KIND = "slotify/elements@1";
+
+  /**
+   * The clipboard is kept in this window and, best effort, in the system one as JSON —
+   * which is what lets a row of buttons cross from one screen to another.
+   */
+  async function copySelection(): Promise<void> {
+    const elements = selectionElements();
+    if (elements.length === 0) return;
+    clipboard = structuredClone($state.snapshot(elements)) as Element[];
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ kind: CLIPBOARD_KIND, elements: clipboard }));
+    } catch {
+      // the in-window clipboard still holds it
+    }
+    statusLine = `${clipboard.length} layer(s) copied`;
+  }
+
+  async function pasteClipboard(): Promise<void> {
+    let elements = clipboard;
+    try {
+      const text = await navigator.clipboard.readText();
+      const parsed = JSON.parse(text) as { kind?: string; elements?: Element[] };
+      if (parsed.kind === CLIPBOARD_KIND && Array.isArray(parsed.elements)) elements = parsed.elements;
+    } catch {
+      // not our JSON, or no permission — fall back to what this window copied
+    }
+    if (elements.length === 0) {
+      statusLine = "nothing to paste";
+      return;
+    }
+    const copies = elements.map((element) => ({
+      ...structuredClone(element),
+      id: nextId(),
+      x: element.x + 4,
+      y: element.y + 4,
+    })) as Element[];
+    project = { ...project, elements: [...project.elements, ...copies] };
+    void ensureSprites(copies);
+    selectedId = copies[0]!.id;
+    checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
+    statusLine = `${copies.length} layer(s) pasted`;
+  }
+
+  const windowBounds = $derived({ x: 0, y: 0, w: WINDOW_W, h: windowHeight(project.rows) });
+
+  function alignSelection(mode: AlignMode): void {
+    const targets = movableSelection();
+    if (targets.length === 0) return;
+    const placements = align(targets, mode, windowBounds);
+    targets.forEach((element, index) => {
+      element.x = placements[index]!.x;
+      element.y = placements[index]!.y;
+    });
+    touch();
+    statusLine = targets.length > 1 ? `${targets.length} layers aligned` : `aligned in the window`;
+  }
+
+  function distributeSelection(axis: Axis): void {
+    const targets = movableSelection();
+    if (targets.length < 3) {
+      statusLine = "tick at least three layers to distribute them";
+      return;
+    }
+    const placements = distribute(targets, axis);
+    targets.forEach((element, index) => {
+      element.x = placements[index]!.x;
+      element.y = placements[index]!.y;
+    });
+    touch();
+  }
+
+  /** Everything takes the selected layer's width or height — or the first one ticked. */
+  function matchSize(dimension: "w" | "h"): void {
+    const targets = movableSelection().filter((element) => RESIZABLE.includes(element.kind));
+    if (targets.length < 2) {
+      statusLine = "tick two or more resizable layers first";
+      return;
+    }
+    const reference = targets.find((element) => element.id === selectedId) ?? targets[0]!;
+    for (const element of targets) element[dimension] = reference[dimension];
+    touch();
+  }
+
+  /**
+   * Layer order is draw order: earlier in the list is drawn first, so it ends up behind.
+   */
+  function moveLayer(id: string, delta: number): void {
+    const index = project.elements.findIndex((element) => element.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= project.elements.length) return;
+    const elements = [...project.elements];
+    const [moved] = elements.splice(index, 1);
+    elements.splice(target, 0, moved!);
+    project = { ...project, elements };
+  }
+
+  function toggleFlag(element: Element, flag: "hidden" | "locked"): void {
+    element[flag] = !element[flag];
+    touch();
   }
 
   function retextSize(element: Element): void {
@@ -776,10 +1303,26 @@
 
     <div class="chips">
       <span class="chip">advance <b>{baked.advance}</b></span>
+      {#if cursor}<span class="chip">{cursor.x},{cursor.y}</span>{/if}
       {#if baked.straysRemoved > 0}
         <span class="badge warn">{baked.straysRemoved} strays stripped</span>
       {/if}
     </div>
+
+    <button
+      class="btn ghost"
+      title="Undo (ctrl+Z)"
+      disabled={undoDepth === 0}
+      onclick={undoStep}
+      aria-label="undo"
+    >&#x21B6;</button>
+    <button
+      class="btn ghost"
+      title="Redo (ctrl+shift+Z)"
+      disabled={redoDepth === 0}
+      onclick={redoStep}
+      aria-label="redo"
+    >&#x21B7;</button>
 
     <button class="btn" onclick={saveProject}>Save project</button>
     <button class="btn primary" onclick={exportToPack}>Export to pack</button>
@@ -792,10 +1335,11 @@
           <span class="label-mono">Tools</span>
         </div>
         <div class="palette">
-          {#each ["select", "button", "infobox", "slot", "erase", "cover", "text", "panel", "well", "hotspot"] as candidate}
+          {#each TOOLS as candidate, index}
             <button
               class="tool"
               class:active={tool === candidate && !pendingComponent}
+              title={`${candidate} (${index === 9 ? 0 : index + 1})`}
               onclick={() => { tool = candidate as Tool; pendingComponent = null; }}
             >{candidate}</button>
           {/each}
@@ -847,12 +1391,45 @@
           {#each project.elements as element}
             <li class="layer-row">
               <input type="checkbox" checked={checked.has(element.id)} onchange={() => toggleChecked(element.id)} />
-              <button class="row-btn" class:active={selectedId === element.id} onclick={() => (selectedId = element.id)}>
+              <button
+                class="row-btn"
+                class:active={selectedId === element.id}
+                class:muted={element.hidden}
+                onclick={() => (selectedId = element.id)}
+              >
                 <span class="truncate">
                   {element.kind === "tiles" ? `${element.tileKind} ×${element.cells?.length ?? 0}` : element.kind}{element.label ? ` “${element.label}”` : ""}
                 </span>
                 <span class="trail">{element.x},{element.y}</span>
               </button>
+              <div class="layer-tools">
+                <button
+                  class="icon"
+                  title="Move up: drawn earlier, so further back"
+                  aria-label="move layer up"
+                  onclick={() => moveLayer(element.id, -1)}
+                >&#x25B2;</button>
+                <button
+                  class="icon"
+                  title="Move down: drawn later, so further forward"
+                  aria-label="move layer down"
+                  onclick={() => moveLayer(element.id, 1)}
+                >&#x25BC;</button>
+                <button
+                  class="icon"
+                  class:on={element.hidden}
+                  title="Hidden layers are not drawn and not exported"
+                  aria-label="hide layer"
+                  onclick={() => toggleFlag(element, "hidden")}
+                >{element.hidden ? "\u25CB" : "\u25CF"}</button>
+                <button
+                  class="icon"
+                  class:on={element.locked}
+                  title="Locked layers ignore clicks on the canvas"
+                  aria-label="lock layer"
+                  onclick={() => toggleFlag(element, "locked")}
+                >{element.locked ? "\u25A0" : "\u25A1"}</button>
+              </div>
             </li>
           {/each}
           {#if project.elements.length === 0}
@@ -1016,6 +1593,42 @@
       {/if}
 
       <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Arrange</span>
+          <span class="count">{checked.size > 1 ? checked.size : selected ? 1 : 0}</span>
+        </div>
+        <p class="hint">
+          {#if checked.size > 1}
+            Aligns the {checked.size} ticked layers to each other.
+          {:else}
+            Aligns the selected layer inside the window. Tick two or more to align them
+            to each other instead.
+          {/if}
+        </p>
+        <div class="btn-grid">
+          <button class="btn sm" title="Align left" onclick={() => alignSelection("left")}>&#x2523;</button>
+          <button class="btn sm" title="Centre horizontally" onclick={() => alignSelection("hcenter")}>&#x2503;</button>
+          <button class="btn sm" title="Align right" onclick={() => alignSelection("right")}>&#x252B;</button>
+          <button class="btn sm" title="Align top" onclick={() => alignSelection("top")}>&#x2533;</button>
+          <button class="btn sm" title="Centre vertically" onclick={() => alignSelection("vcenter")}>&#x2501;</button>
+          <button class="btn sm" title="Align bottom" onclick={() => alignSelection("bottom")}>&#x253B;</button>
+        </div>
+        <div class="row2">
+          <button class="btn sm" onclick={() => distributeSelection("h")}>Space across</button>
+          <button class="btn sm" onclick={() => distributeSelection("v")}>Space down</button>
+        </div>
+        <div class="row2">
+          <button class="btn sm" onclick={() => matchSize("w")}>Same width</button>
+          <button class="btn sm" onclick={() => matchSize("h")}>Same height</button>
+        </div>
+        <div class="row2">
+          <button class="btn sm" onclick={duplicateSelection}>Duplicate</button>
+          <button class="btn sm" onclick={copySelection}>Copy</button>
+          <button class="btn sm" onclick={pasteClipboard}>Paste</button>
+        </div>
+      </section>
+
+      <section class="card">
         <div class="card-head"><span class="label-mono">Screen</span></div>
         <div class="grid2">
           <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={project.rows} /></label>
@@ -1036,6 +1649,9 @@
         <label class="field top"><span>codepoint</span><input bind:value={project.codepoint} /></label>
         <label class="field top"><span>fallback title</span><input bind:value={project.fallbackTitle} /></label>
         <label class="check"><input type="checkbox" bind:checked={guides} /> guides</label>
+        <label class="check">
+          <input type="checkbox" bind:checked={showSlotNumbers} /> raw slot numbers
+        </label>
         <label class="check"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
         <p class="hint">
           Erase tool: tap any part of the window — a slot, the top band, a margin — and it
@@ -1233,6 +1849,46 @@
     height: 10px;
     border-radius: 3px;
     flex: 0 0 auto;
+  }
+
+  /* The per-layer controls: small, quiet, and never wider than the name they follow. */
+  .layer-tools {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.1rem;
+  }
+
+  .icon {
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: none;
+    color: var(--ink-soft);
+    padding: 0.1rem 0.22rem;
+    font: inherit;
+    font-size: 0.6rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .icon:hover {
+    border-color: var(--line);
+    background: var(--canvas);
+    color: var(--ink);
+  }
+
+  .icon.on {
+    color: var(--primary);
+  }
+
+  .muted {
+    opacity: 0.45;
+  }
+
+  /* Six alignment buttons in the shape of the thing they do: two rows of three. */
+  .btn-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.25rem;
   }
 
   .truncate-line {
