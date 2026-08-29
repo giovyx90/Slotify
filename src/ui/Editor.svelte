@@ -1783,6 +1783,28 @@
     previewLayers = next;
   }
 
+  /**
+   * All the way to one end of the drawing order. Every new element is appended, so
+   * anything added after a paint layer covers it — and climbing there one ▲ at a time
+   * is how you conclude you cannot paint over a button at all.
+   */
+  function sendLayerTo(id: string, end: "front" | "back"): void {
+    const index = elements.findIndex((element) => element.id === id);
+    if (index < 0) return;
+    const reordered = [...elements];
+    const [moved] = reordered.splice(index, 1);
+    if (end === "front") reordered.push(moved!);
+    else reordered.unshift(moved!);
+    setElements(reordered);
+    statusLine = end === "front" ? "brought to the front" : "sent to the back";
+  }
+
+  /** True when something is drawn after the active paint layer, and so over it. */
+  const paintIsBuried = $derived(
+    activePaint != null &&
+      elements.findIndex((element) => element.id === activePaint.id) < elements.length - 1,
+  );
+
   function toggleFlag(element: Element, flag: "hidden" | "locked"): void {
     element[flag] = !element[flag];
     touch();
@@ -2249,6 +2271,15 @@
           {#if activePaint}
             <button class="btn block sm danger" onclick={clearPaintLayer}>Clear this layer</button>
           {/if}
+          {#if paintIsBuried}
+            <p class="hint bad">
+              This layer sits under something drawn later, so strokes over it will not
+              show. Every new element goes on top of the stack.
+            </p>
+            <button class="btn block sm" onclick={() => sendLayerTo(activePaint!.id, "front")}>
+              Bring the paint layer to the front
+            </button>
+          {/if}
           <p class="hint">
             A full-window paint layer swallows clicks in select mode - lock it in the
             layer list once you are done with it.
@@ -2695,6 +2726,10 @@
                 <button class="btn sm" onclick={() => nudge(0, 1)} aria-label="down">▼</button>
               </div>
             {/if}
+            <div class="row2">
+              <button class="btn sm" onclick={() => sendLayerTo(selected!.id, "front")}>To front</button>
+              <button class="btn sm" onclick={() => sendLayerTo(selected!.id, "back")}>To back</button>
+            </div>
             <button class="btn sm danger" onclick={removeSelected}>Delete</button>
           </div>
         </section>

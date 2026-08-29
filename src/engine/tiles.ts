@@ -88,10 +88,15 @@ export function drawTileRegion(
       const cell = tileRect(row, col);
       const y = cell.y + offsetY;
       if (!claimed.has(key(row - 1, col))) {
-        for (let x = cell.x; x < cell.x + cell.w - 1; x++) put(raster, x, y + ring, top);
+        // A raised plate leaves its top-right pixel to the dark edge — but only at the
+        // plate's real end. Shortening every cell instead punched a hole in the
+        // highlight at each seam, which is what made one wide button read as several.
+        const ends = !claimed.has(key(row, col + 1));
+        for (let x = cell.x; x < cell.x + cell.w - (ends ? 1 : 0); x++) put(raster, x, y + ring, top);
       }
       if (!claimed.has(key(row, col - 1))) {
-        for (let dy = 0; dy < cell.h - 1; dy++) put(raster, cell.x + ring, y + dy, top);
+        const ends = !claimed.has(key(row + 1, col));
+        for (let dy = 0; dy < cell.h - (ends ? 1 : 0); dy++) put(raster, cell.x + ring, y + dy, top);
       }
     }
   }

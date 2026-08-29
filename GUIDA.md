@@ -256,6 +256,12 @@ della cronologia, perche' il base64 viene riscritto quando alzi il dito.
 **Un livello di pittura grande quanto la finestra si prende tutti i click** in modalita'
 select: quando hai finito, mettigli il lucchetto nella lista layer.
 
+**Se le pennellate non si vedono, il livello e' sotto qualcos'altro.** Ogni elemento
+nuovo si accoda *in cima* alla pila, quindi un bottone aggiunto dopo copre la pittura.
+Il riquadro Paint se ne accorge e te lo dice, con un bottone che porta il livello davanti
+in un colpo solo; per qualunque altro elemento ci sono **To front** e **To back** accanto
+a Delete.
+
 ---
 
 ## 8. Tastiera, annulla, selezioni e layer

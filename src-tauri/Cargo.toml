@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 name = "slotify"
-version = "0.2.1"
+version = "0.2.2"
 description = "Design tool for Minecraft painted-GUI resource packs"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/giovyx90/Slotify"
