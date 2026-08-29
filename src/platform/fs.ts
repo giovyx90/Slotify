@@ -95,8 +95,22 @@ class TauriBackend implements FsBackend {
     return fs.readTextFile(path);
   }
 
+  /**
+   * Writes, creating the parent chain first. The dev bridge has always done this
+   * (`mkdirSync(..., { recursive: true })` in vite.config.ts); the fs plugin does not,
+   * and `tools/slotify/components/` does not exist in a fresh pack checkout — which is
+   * why importing a sprite failed in the packaged app and worked in the browser.
+   */
   async write(path: string, bytes: Uint8Array): Promise<void> {
     const fs = await import("@tauri-apps/plugin-fs");
+    const parent = path.replace(/\/+[^/]*$/, "");
+    if (parent && parent !== path) {
+      try {
+        await fs.mkdir(parent, { recursive: true });
+      } catch {
+        // already there, or the scope refuses — let the write report the real problem
+      }
+    }
     await fs.writeFile(path, bytes);
   }
 

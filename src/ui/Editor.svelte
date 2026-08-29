@@ -22,6 +22,7 @@
   import { parseCodepoint } from "../engine/unicode";
   import { visualsYmlBlock, configYmlBlock } from "../engine/visualsYml";
   import { joinPath, type FsBackend } from "../platform/fs";
+  import { pickFile } from "../platform/pick";
   import { rconExec } from "../platform/rcon";
   import { decodeTexture, deleteComponent, listComponents, loadSpriteRaster, saveComponent } from "./model";
 
@@ -88,7 +89,18 @@
   let pendingComponent: LibraryComponent | null = $state(null);
   let spriteRasters = $state(new Map<string, Raster>());
   let componentName = $state("");
-  let fileInput: HTMLInputElement | undefined = $state();
+
+  /**
+   * The onion skin: an imported PNG drawn over the artwork at a chosen opacity, so a
+   * screen can be matched against a mockup or against the screenshot it replaces. It
+   * lives only in this session — the project never carries it and the sheet never bakes
+   * it.
+   */
+  let reference: Raster | null = $state(null);
+  let referenceName = $state("");
+  let referenceOpacity = $state(45);
+  let referenceX = $state(0);
+  let referenceY = $state(0);
 
   let deployPath = $state("");
   let rconHost = $state("");
@@ -178,8 +190,29 @@
     target.imageSmoothingEnabled = false;
     target.clearRect(0, 0, canvas.width, canvas.height);
     target.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+    if (reference && referenceOpacity > 0) drawReference(target);
     drawOverlays(target);
   });
+
+  function drawReference(target: CanvasRenderingContext2D): void {
+    const sheet = document.createElement("canvas");
+    sheet.width = reference!.width;
+    sheet.height = reference!.height;
+    sheet.getContext("2d")!.putImageData(
+      new ImageData(new Uint8ClampedArray(reference!.data), reference!.width, reference!.height), 0, 0,
+    );
+    target.save();
+    target.globalAlpha = referenceOpacity / 100;
+    target.imageSmoothingEnabled = false;
+    target.drawImage(
+      sheet,
+      (PAD + referenceX) * zoom,
+      (PAD + referenceY) * zoom,
+      reference!.width * zoom,
+      reference!.height * zoom,
+    );
+    target.restore();
+  }
 
   function drawOverlays(target: CanvasRenderingContext2D): void {
     const stroke = (x: number, y: number, w: number, h: number, colour: string, width = 1) => {
@@ -576,12 +609,30 @@
     statusLine = `component "${component.name}" saved to the library`;
   }
 
-  async function importSpritePng(event: Event): Promise<void> {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const raster = decodeTexture(bytes);
-    const name = file.name.replace(/\.png$/i, "");
+  /**
+   * Import a PNG as a library sprite. Every failure here used to be silent — a picker
+   * that never opened, a write into a directory that did not exist — so each step now
+   * says what went wrong on the status line.
+   */
+  async function importSpritePng(): Promise<void> {
+    let picked: Awaited<ReturnType<typeof pickFile>>;
+    try {
+      picked = await pickFile();
+    } catch (error) {
+      statusLine = `could not open the file picker: ${error}`;
+      return;
+    }
+    if (!picked) return;
+
+    let raster: Raster;
+    try {
+      raster = decodeTexture(picked.bytes);
+    } catch (error) {
+      statusLine = `${picked.name} is not a PNG this tool can read: ${error}`;
+      return;
+    }
+
+    const name = picked.name.replace(/\.png$/i, "");
     const component: LibraryComponent = {
       version: 1,
       id: slugify(name),
@@ -590,12 +641,35 @@
       w: raster.width,
       h: raster.height,
     };
-    await saveComponent(backend, packRoot, component, bytes);
+    try {
+      await saveComponent(backend, packRoot, component, picked.bytes);
+    } catch (error) {
+      statusLine = `could not write the sprite into the library: ${error}`;
+      return;
+    }
     spriteRasters = new Map(spriteRasters).set(component.id, raster);
     await refreshLibrary();
-    statusLine = `sprite "${name}" imported — tap the canvas to place it`;
+    statusLine = `sprite "${name}" imported (${raster.width}x${raster.height}) — tap the canvas to place it`;
     pendingComponent = component;
-    (event.target as HTMLInputElement).value = "";
+  }
+
+  /**
+   * Import a PNG as a reference sheet drawn under everything — the screen you are
+   * copying, or a mockup painted elsewhere. It is never exported; it only helps you aim.
+   */
+  async function importReference(): Promise<void> {
+    const picked = await pickFile().catch((error) => {
+      statusLine = `could not open the file picker: ${error}`;
+      return null;
+    });
+    if (!picked) return;
+    try {
+      reference = decodeTexture(picked.bytes);
+      referenceName = picked.name;
+      statusLine = `reference "${picked.name}" loaded — it guides the eye, it never exports`;
+    } catch (error) {
+      statusLine = `${picked.name} is not a PNG this tool can read: ${error}`;
+    }
   }
 
   function addHotspot(): void {
@@ -761,8 +835,7 @@
           <input placeholder="component name" bind:value={componentName} />
           <button class="btn sm" onclick={saveSelectionAsComponent}>Save ✓</button>
         </div>
-        <button class="btn block sm" onclick={() => fileInput?.click()}>Import PNG…</button>
-        <input class="hidden" type="file" accept="image/png" bind:this={fileInput} onchange={importSpritePng} />
+        <button class="btn block sm" onclick={importSpritePng}>Import PNG…</button>
       </section>
 
       <section class="card">
@@ -974,6 +1047,33 @@
       </section>
 
       <section class="card">
+        <div class="card-head">
+          <span class="label-mono">Reference</span>
+          {#if reference}<span class="chip">{reference.width}x{reference.height}</span>{/if}
+        </div>
+        {#if reference}
+          <p class="hint truncate-line">{referenceName}</p>
+          <div class="grid2">
+            <label class="field"><span>opacity</span>
+              <input type="range" min="0" max="100" bind:value={referenceOpacity} />
+            </label>
+            <label class="field"><span>%</span>
+              <input type="number" min="0" max="100" bind:value={referenceOpacity} />
+            </label>
+            <label class="field"><span>x</span><input type="number" bind:value={referenceX} /></label>
+            <label class="field"><span>y</span><input type="number" bind:value={referenceY} /></label>
+          </div>
+          <div class="row2">
+            <button class="btn sm" onclick={importReference}>Replace…</button>
+            <button class="btn sm danger" onclick={() => { reference = null; referenceName = ""; }}>Remove</button>
+          </div>
+        {:else}
+          <button class="btn block sm" onclick={importReference}>Import PNG as onion skin…</button>
+          <p class="hint">Drawn over the artwork to trace or compare. Never exported.</p>
+        {/if}
+      </section>
+
+      <section class="card">
         <div class="card-head"><span class="label-mono">Measured</span></div>
         <dl class="kv">
           <div><dt>Advance</dt><dd>{baked.advance}</dd></div>
@@ -1135,8 +1235,10 @@
     flex: 0 0 auto;
   }
 
-  .hidden {
-    display: none;
+  .truncate-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .row2 {
