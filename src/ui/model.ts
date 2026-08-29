@@ -12,7 +12,9 @@ import {
   stripIsolated,
   type Raster,
 } from "../engine/raster";
+import { CELL, GRID_X, GRID_Y, SHEET_CANVAS, SHEET_TO_WINDOW_Y, WINDOW_W } from "../engine/geometry";
 import { buildRegistry, collisions, type Collision, type Registry } from "../engine/registry";
+import { NEXT_SPACERS } from "../engine/spacers";
 import { joinPath, type FsBackend } from "../platform/fs";
 
 /**
@@ -38,6 +40,93 @@ export interface Profile {
   codepointRanges?: { module: string; range: [string, string] }[];
   /** The pack's named colours, offered in every colour field and referenced as `@id`. */
   palette?: Swatch[];
+  /**
+   * Declared chest geometry. The engine's own constants are derived from the shipped
+   * screens and are not configurable; this block exists so a pack that believes
+   * something different finds out at load, instead of exporting art that lands wrong.
+   */
+  geometry?: {
+    sheetCanvas?: number;
+    windowWidth?: number;
+    cell?: number;
+    gridOrigin?: [number, number];
+    sheetToWindowY?: number;
+    defaultShift?: number;
+  };
+  spacers?: { negativeBase?: string; positiveBase?: string; maxPower?: number };
+}
+
+/**
+ * The files a pack may declare its profile in, tried in order. A repository with none of
+ * them is not a Slotify pack yet, and the error says which names it looked for.
+ */
+export const PROFILE_CANDIDATES = [
+  "slotify.profile.json",
+  "tools/slotify/next.profile.json",
+  "profiles/example.profile.json",
+];
+
+const PROFILE_DIRS = ["tools/slotify", "profiles"];
+
+export async function findProfile(backend: FsBackend, root: string): Promise<string | null> {
+  for (const candidate of PROFILE_CANDIDATES) {
+    try {
+      await backend.readText(joinPath(root, candidate));
+      return candidate;
+    } catch {
+      // try the next name
+    }
+  }
+
+  // Then any *.profile.json sitting in the usual places — but never a *.local.json,
+  // which is where paths and passwords live and which is gitignored for that reason.
+  for (const dir of PROFILE_DIRS) {
+    try {
+      const entries = await backend.list(joinPath(root, dir));
+      const found = entries.find(
+        (entry) => !entry.dir && entry.name.endsWith(".profile.json") && !entry.name.includes(".local."),
+      );
+      if (found) return `${dir}/${found.name}`;
+    } catch {
+      // no such directory here
+    }
+  }
+
+  return null;
+}
+
+/**
+ * What the profile claims about the chest, checked against what the engine knows. A
+ * disagreement is reported, never obeyed: the constants come from a shipped screen that
+ * was measured, and silently following a wrong number would move every export.
+ */
+export function geometryWarnings(profile: Profile): string[] {
+  const warnings: string[] = [];
+  const check = (label: string, declared: number | undefined, actual: number): void => {
+    if (declared != null && declared !== actual) {
+      warnings.push(`profile says ${label} ${declared}, the engine uses ${actual} — the engine wins`);
+    }
+  };
+
+  const geometry = profile.geometry ?? {};
+  check("sheetCanvas", geometry.sheetCanvas, SHEET_CANVAS);
+  check("windowWidth", geometry.windowWidth, WINDOW_W);
+  check("cell", geometry.cell, CELL);
+  check("sheetToWindowY", geometry.sheetToWindowY, SHEET_TO_WINDOW_Y);
+  if (geometry.gridOrigin && (geometry.gridOrigin[0] !== GRID_X || geometry.gridOrigin[1] !== GRID_Y)) {
+    warnings.push(
+      `profile says gridOrigin (${geometry.gridOrigin.join(",")}), the engine uses (${GRID_X},${GRID_Y})`,
+    );
+  }
+
+  const spacers = profile.spacers ?? {};
+  const asCodepoint = (value: string | undefined): number | undefined =>
+    value == null ? undefined : Number.parseInt(value.replace(/^U\+/i, ""), 16);
+  check("spacers.negativeBase", asCodepoint(spacers.negativeBase), NEXT_SPACERS.negativeBase);
+  check("spacers.positiveBase", asCodepoint(spacers.positiveBase), NEXT_SPACERS.positiveBase);
+  check("spacers.maxPower", spacers.maxPower, NEXT_SPACERS.maxPower);
+
+  return warnings;
 }
 
 export interface ScreenEntry {
@@ -53,15 +142,26 @@ export interface ScreenEntry {
 
 export interface LoadedPack {
   root: string;
+  /** Which candidate file the profile came from — shown, so the answer is never a guess. */
+  profilePath: string;
   profile: Profile;
+  /** Disagreements between the profile and the engine. Reported, never obeyed. */
+  warnings: string[];
   fonts: ParsedFont[];
   registry: Registry;
   collisions: Collision[];
   screens: ScreenEntry[];
 }
 
-export async function loadPack(backend: FsBackend, root: string, profilePath: string): Promise<LoadedPack> {
-  const profile = JSON.parse(await backend.readText(joinPath(root, profilePath))) as Profile;
+export async function loadPack(backend: FsBackend, root: string, profilePath?: string): Promise<LoadedPack> {
+  const path = profilePath ?? (await findProfile(backend, root));
+  if (path == null) {
+    throw new Error(
+      `no Slotify profile here. Looked for ${PROFILE_CANDIDATES.join(", ")}, then any ` +
+        `*.profile.json under ${PROFILE_DIRS.join(" or ")}.`,
+    );
+  }
+  const profile = JSON.parse(await backend.readText(joinPath(root, path))) as Profile;
 
   const fontDir = joinPath(root, profile.paths.fontDir);
   const names = (await backend.list(fontDir))
@@ -97,7 +197,16 @@ export async function loadPack(backend: FsBackend, root: string, profilePath: st
   }
   screens.sort((a, b) => a.folder.localeCompare(b.folder) || a.codepoint - b.codepoint);
 
-  return { root, profile, fonts, registry, collisions: collisions(registry), screens };
+  return {
+    root,
+    profilePath: path,
+    profile,
+    warnings: geometryWarnings(profile),
+    fonts,
+    registry,
+    collisions: collisions(registry),
+    screens,
+  };
 }
 
 /**

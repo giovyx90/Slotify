@@ -26,7 +26,7 @@
   } from "./model";
 
   const backend = detectBackend();
-  const PROFILE_PATH = "tools/slotify/next.profile.json";
+  // Which profile a repository uses is discovered, not assumed: see PROFILE_CANDIDATES.
 
   let status = $state("Loading…");
   let pack: LoadedPack | null = $state(null);
@@ -73,7 +73,7 @@
   async function openRoot(root: string): Promise<void> {
     status = "Reading fonts…";
     needsFolder = false;
-    pack = await loadPack(backend, root, PROFILE_PATH);
+    pack = await loadPack(backend, root);
     status = "";
     void refreshProjects();
     gameFont = await loadGameFont(backend, pack);
@@ -326,6 +326,22 @@
                 </li>
               {/each}
             </ul>
+          </section>
+        {/if}
+
+        {#if pack.warnings.length > 0}
+          <section class="card alarm">
+            <details open>
+              <summary>
+                <span class="label-mono">Profile disagrees</span>
+                <span class="count">{pack.warnings.length}</span>
+              </summary>
+              <ul class="collisions">
+                {#each pack.warnings as warning}
+                  <li>{warning}</li>
+                {/each}
+              </ul>
+            </details>
           </section>
         {/if}
 

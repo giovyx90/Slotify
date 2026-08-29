@@ -170,6 +170,52 @@
   let rconPort = $state(25575);
   let rconPassword = $state("");
 
+  /**
+   * The unsaved draft. Everything the history records also lands in localStorage, so
+   * closing the window between two saves costs the session and not the work. The
+   * password is never part of it, and neither is anything outside the project.
+   */
+  const draftKey = $derived(`slotify.draft.${project.module}-${project.screenKey}`);
+  let recoverable: Project | null = $state(null);
+  let draftChecked = false;
+  /** Where the project was last written, to notice a rename leaving an orphan behind. */
+  let lastSavedPath: string | null = null;
+
+  $effect(() => {
+    const key = draftKey;
+    if (draftChecked) return;
+    draftChecked = true;
+    try {
+      const text = localStorage.getItem(key);
+      if (text && text !== JSON.stringify(project)) recoverable = JSON.parse(text) as Project;
+    } catch {
+      // no storage, no draft — the editor works the same either way
+    }
+    try {
+      const rcon = JSON.parse(localStorage.getItem("slotify.rcon") ?? "{}") as {
+        host?: string;
+        port?: number;
+        deployPath?: string;
+      };
+      rconHost = rcon.host ?? "";
+      rconPort = rcon.port ?? 25575;
+      deployPath = rcon.deployPath ?? "";
+    } catch {
+      // same
+    }
+  });
+
+  function rememberDeployTarget(): void {
+    try {
+      localStorage.setItem(
+        "slotify.rcon",
+        JSON.stringify({ host: rconHost, port: rconPort, deployPath }),
+      );
+    } catch {
+      // the password is deliberately not in here, and nor is anything else
+    }
+  }
+
   const palette = $derived([...(project.palette ?? []), ...packPalette]);
   const context = $derived<RenderContext>({
     fonts,
@@ -365,7 +411,31 @@
       clearTimeout(historyTimer);
       historyTimer = null;
     }
-    if (commit(historyStack, JSON.stringify(project))) syncHistory();
+    if (commit(historyStack, JSON.stringify(project))) {
+      syncHistory();
+      try {
+        localStorage.setItem(draftKey, historyStack.present);
+      } catch {
+        // a session without storage simply has no safety net
+      }
+    }
+  }
+
+  function discardDraft(): void {
+    recoverable = null;
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {
+      // nothing to remove
+    }
+  }
+
+  function restoreDraft(): void {
+    if (!recoverable) return;
+    flushHistory();
+    applySnapshot(JSON.stringify(recoverable));
+    recoverable = null;
+    statusLine = "draft restored - the file on disk is untouched until you save";
   }
 
   function applySnapshot(text: string): void {
@@ -1413,23 +1483,68 @@
   async function saveProject(): Promise<void> {
     const path = joinPath(packRoot, "tools/slotify/projects", `${project.module}-${project.screenKey}.guiproj.json`);
     await backend.write(path, new TextEncoder().encode(serializeProject(project)));
-    statusLine = `saved ${path}`;
+
+    // The file name is derived from module and screenKey, so renaming either writes a
+    // new file and leaves the old one sitting there. Say so rather than let it rot.
+    const orphaned = lastSavedPath != null && lastSavedPath !== path ? lastSavedPath : null;
+    lastSavedPath = path;
+    discardDraft();
+    statusLine = orphaned ? `saved ${path} - ${orphaned} is now stale` : `saved ${path}`;
+  }
+
+  /** How many pixels two sheets disagree on, or -1 when they are not the same size. */
+  function pixelsChanged(before: Raster, after: Raster): number {
+    if (before.width !== after.width || before.height !== after.height) return -1;
+    let changed = 0;
+    for (let index = 0; index < after.data.length; index += 4) {
+      if (
+        before.data[index] !== after.data[index] ||
+        before.data[index + 1] !== after.data[index + 1] ||
+        before.data[index + 2] !== after.data[index + 2] ||
+        before.data[index + 3] !== after.data[index + 3]
+      ) {
+        changed++;
+      }
+    }
+    return changed;
+  }
+
+  /** The screen as drawn, written out for an art brief. Never part of the pack. */
+  async function savePreviewPng(): Promise<void> {
+    if (!composed) return;
+    const path = joinPath(packRoot, "tools/slotify/previews", `${project.module}-${project.screenKey}.png`);
+    await backend.write(path, encodePng(composed));
+    statusLine = `preview written to ${path}`;
   }
 
   async function exportToPack(): Promise<void> {
     const texturePath = joinPath(
       packRoot, "pack-source", project.module, "assets/minecraft/textures", project.textureFile,
     );
+
+    // What is about to be overwritten, kept and counted. The splice into gui.json is
+    // proven byte-identical by a golden test; the texture never was, and this is a
+    // one-way door onto somebody's art.
+    let textureNote = "new texture";
+    try {
+      const existing = await backend.read(texturePath);
+      await backend.write(`${texturePath}.bak`, existing);
+      const changed = pixelsChanged(decodeTexture(existing), baked.sheet);
+      textureNote = changed < 0 ? "texture replaced (different size)" : `${changed} pixel(s) changed`;
+    } catch {
+      // nothing there yet
+    }
     await backend.write(texturePath, encodePng(baked.sheet));
 
     const guiJsonPath = joinPath(packRoot, fontPath);
     const raw = await backend.readText(guiJsonPath);
     const result = spliceProviders(raw, [baked.provider]);
     if (result.added.length > 0 || result.corrected.length > 0) {
+      await backend.write(`${guiJsonPath}.bak`, new TextEncoder().encode(raw));
       await backend.write(guiJsonPath, new TextEncoder().encode(result.text));
     }
     statusLine =
-      `texture written; gui.json: +${result.added.length} added, ` +
+      `texture written (${textureNote}); gui.json: +${result.added.length} added, ` +
       `${result.corrected.length} corrected, ${result.skipped.length} already present. ` +
       `Advance ${baked.advance}, strays stripped ${baked.straysRemoved}.`;
   }
@@ -1476,12 +1591,14 @@
     for (const file of plan.files) {
       await backend.write(joinPath(deployPath, file.path), file.bytes);
     }
+    rememberDeployTarget();
     statusLine = `wrote ${plan.files.length} file(s) under ${deployPath}`;
   }
 
   async function runReload(): Promise<void> {
     try {
       statusLine = "rcon: running…";
+      rememberDeployTarget();
       const response = await rconExec(
         { host: rconHost, port: rconPort, password: rconPassword },
         "nexo reload pack",
@@ -1687,6 +1804,20 @@
     </section>
 
     <aside class="pane right">
+      {#if recoverable}
+        <section class="card alarm">
+          <div class="card-head"><span class="label-mono">Unsaved draft</span></div>
+          <p class="hint">
+            This screen was left with changes that never reached disk. Restoring touches
+            nothing on disk either - you still have to save.
+          </p>
+          <div class="row2">
+            <button class="btn sm" onclick={restoreDraft}>Restore</button>
+            <button class="btn sm danger" onclick={discardDraft}>Discard</button>
+          </div>
+        </section>
+      {/if}
+
       {#if selected}
         <section class="card">
           <div class="card-head">
@@ -2084,6 +2215,7 @@
       <section class="card">
         <div class="card-head"><span class="label-mono">Copy out</span></div>
         <div class="stack">
+          <button class="btn block" onclick={savePreviewPng}>Save preview PNG</button>
           <button class="btn block" onclick={() => copy(visualsYmlBlock(screenConfig), "visuals yml")}>Visuals yml</button>
           <button class="btn block" onclick={() => copy(configYmlBlock(`${project.module}.gui`, screenConfig), "config yml")}>Config yml</button>
           <button class="btn block" onclick={() => {
