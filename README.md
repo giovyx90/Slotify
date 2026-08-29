@@ -54,6 +54,16 @@ The roadmap, each stage useful on its own:
   sprite, and place either with a tap — components live next to the pack
   (`tools/slotify/components/`) so every future screen starts from the same parts.
   Dragged elements edge-snap to each other; slots snap to the container grid.
+- **v5 — States, paint, and where it runs** ✅: a screen can carry more than one
+  state - each its own sheet, codepoint and Java constant, drawn over the base and
+  sharing its window, so a second state costs a sheet instead of a second screen; the
+  preview composes them through the title's real cursor arithmetic, and the export
+  writes every sheet and splices every provider in one pass. A **paint** tool - brush,
+  eraser, fill, line, rect, ellipse, recolour, with mirror, dither and pixel-perfect -
+  puts a paint layer in the same element stack as everything else. The ascent grew a
+  guard: artwork that falls off the 256 sheet is reported per state, with the room-above
+  value that would fix it, instead of being cropped in silence. Ships as a Windows
+  installer from CI and as a hosted browser build.
 - **v4 — The editor as a tool you can work in** ✅: undo and redo over the whole
   project (snapshot-based, in `engine/history.ts`, coalesced so a drag is one step); a
   keyboard — arrows nudge, shift-arrows move a cell, duplicate, copy and paste layers
@@ -69,6 +79,17 @@ The roadmap, each stage useful on its own:
   closing, exports back up what they overwrite and report how many pixels changed, and
   the profile is discovered rather than hard-coded — with its declared geometry checked
   against the engine's own constants.
+
+## Getting it
+
+- **Desktop (Windows)** — the installer is attached to each [GitHub
+  Release](https://github.com/giovyx90/Slotify/releases). Tagging `v*` builds it on CI
+  and publishes it there; the binary never enters the repository, where a 6 MB installer
+  per version would stay in every clone forever.
+- **In a browser, no install** — the same build hosted on Vercel. It reaches a real pack
+  checkout through the File System Access API: the folder you hand over, and nothing
+  else. Chromium only (Chrome, Edge, Opera), and the RCON push stays a desktop feature
+  because no page may open a TCP socket.
 
 ## Using it
 

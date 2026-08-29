@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { FileSystemAccessBackend } from "./fsAccess";
+
 /**
- * The one filesystem surface the app uses, with two backends:
+ * The one filesystem surface the app uses, with three backends:
  *
  * - packaged: the Tauri fs plugin (scoped by capabilities);
  * - browser dev server: the `/__slotify/*` bridge vite.config.ts serves, which only
@@ -18,6 +20,13 @@ export interface DirEntry {
 export interface FsBackend {
   /** Named entry points the user may browse — never the machine at large. */
   roots(): Promise<Record<string, string>>;
+  /**
+   * Whether this surface can ask the user for a folder. The dev bridge cannot: its
+   * roots come from a config file the developer wrote.
+   */
+  readonly canPickRoot?: boolean;
+  /** Opens the platform's folder picker; returns the root paths will be built from. */
+  pickRoot?(): Promise<string | null>;
   list(path: string): Promise<DirEntry[]>;
   read(path: string): Promise<Uint8Array>;
   readText(path: string): Promise<string>;
@@ -73,10 +82,22 @@ class DevHttpBackend implements FsBackend {
 }
 
 class TauriBackend implements FsBackend {
+  readonly canPickRoot = true;
+
   async roots(): Promise<Record<string, string>> {
-    // Until the profile-picker flow lands, the packaged app starts from the profile the
-    // user opens via the dialog plugin; there are no implicit roots.
+    // The packaged app starts from the folder the user opens via the dialog plugin;
+    // there are no implicit roots.
     return {};
+  }
+
+  /**
+   * The dialog plugin, not a webview picker: picking through it calls `allow_file` on
+   * the fs scope, which is what makes the chosen folder readable at all.
+   */
+  async pickRoot(): Promise<string | null> {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const dir = await open({ directory: true, title: "Choose your pack repository (the repo root)" });
+    return typeof dir === "string" ? dir.replace(/\\/g, "/") : null;
   }
 
   async list(path: string): Promise<DirEntry[]> {
@@ -124,7 +145,15 @@ class TauriBackend implements FsBackend {
   }
 }
 
+/**
+ * Which filesystem this copy of Slotify is talking to.
+ *
+ * The packaged app has the fs plugin. The dev server has the bridge vite.config.ts
+ * serves. A build served from anywhere else — the hosted one — has the browser's own
+ * File System Access API, which reaches a real pack checkout the user hands over.
+ */
 export function detectBackend(): FsBackend {
-  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  return isTauri ? new TauriBackend() : new DevHttpBackend();
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) return new TauriBackend();
+  if (import.meta.env.DEV) return new DevHttpBackend();
+  return new FileSystemAccessBackend();
 }

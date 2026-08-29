@@ -67,7 +67,6 @@
     pack && selected ? pack.screens.filter((s) => s.folder === selected!.folder && s.codepoint !== selected!.codepoint) : [],
   );
 
-  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   let needsFolder = $state(false);
 
   async function openRoot(root: string): Promise<void> {
@@ -86,17 +85,16 @@
     }
   }
 
-  /** The packaged app's way in: pick the pack repository with the native dialog. */
+  /** Whichever surface this is, ask it for the pack folder. */
   async function pickFolder(): Promise<void> {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const dir = await open({ directory: true, title: "Choose your pack repository (the repo root)" });
-    if (typeof dir === "string") {
-      try {
-        await openRoot(dir.replace(/\\/g, "/"));
-      } catch (error) {
-        status = `Failed to open pack: ${error}`;
-        needsFolder = true;
-      }
+    if (!backend.pickRoot) return;
+    try {
+      const root = await backend.pickRoot();
+      if (root == null) return;
+      await openRoot(root);
+    } catch (error) {
+      status = `Failed to open pack: ${error}`;
+      needsFolder = true;
     }
   }
 
@@ -110,7 +108,7 @@
           return;
         }
 
-        if (isTauri) {
+        if (backend.canPickRoot) {
           let remembered: string | null = null;
           try {
             remembered = localStorage.getItem("slotify.root");
@@ -130,7 +128,11 @@
           return;
         }
 
-        status = "No roots configured — copy slotify.dev.example.json to slotify.dev.json and point it at your pack checkout.";
+        // Neither a configured root nor a picker: the browser build in a browser that
+        // has no File System Access API, or a dev server with an empty slotify.dev.json.
+        status = import.meta.env.DEV
+          ? "No roots configured — copy slotify.dev.example.json to slotify.dev.json and point it at your pack checkout."
+          : "This browser cannot open a folder. Slotify on the web needs Chrome, Edge or another Chromium browser; everywhere else, use the desktop app.";
       } catch (error) {
         status = `Failed to open pack: ${error}`;
       }

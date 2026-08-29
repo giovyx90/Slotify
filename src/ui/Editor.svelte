@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
   import { align, boundingBox, distribute, type AlignMode, type Axis } from "../engine/align";
+  import { clippedElements, roomAbove, suggestedRoomAbove } from "../engine/bounds";
   import { regionKeyAt, regionRect } from "../engine/carve";
   import { renderScreen } from "../engine/chestRenderer";
   import {
@@ -10,7 +11,7 @@
     type LibraryComponent,
   } from "../engine/components";
   import { buildDeployPlan } from "../engine/deploy";
-  import { CELL, COLS, GRID_X, GRID_Y, WINDOW_W, hotbarY, playerInvY, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
+  import { CELL, COLS, GRID_X, GRID_Y, SHEET_TO_WINDOW_Y, WINDOW_W, hotbarY, playerInvY, slotIndex, slotWindowRect, windowHeight } from "../engine/geometry";
   import { commit, createStack, redo, undo } from "../engine/history";
   import { scaffoldFiles, advanceTable, type ScaffoldInput } from "../engine/javaScaffold";
   import {
@@ -51,6 +52,7 @@
     drawnSheet,
     freeOverlayId,
     overlayConstant,
+    overlayProject,
   } from "../engine/overlay";
   import type { PlateStyle } from "../engine/paint";
   import type { Raster } from "../engine/raster";
@@ -1519,6 +1521,32 @@
     statusLine = `${copies.length} layer(s) pasted`;
   }
 
+  /**
+   * Artwork that falls off the 256 sheet. The renderer drops those pixels without a
+   * word — this is the only place that says so, and it checks every state, not just the
+   * one being edited.
+   */
+  const clipped = $derived([
+    ...clippedElements(project).map((entry) => ({ ...entry, layer: "base" })),
+    ...(project.overlays ?? []).flatMap((overlay) =>
+      clippedElements(overlayProject(project, overlay)).map((entry) => ({
+        ...entry,
+        layer: overlay.name,
+      })),
+    ),
+  ]);
+  const roomFix = $derived(suggestedRoomAbove(layer ? overlayProject(project, layer) : project));
+
+  function applyRoomFix(): void {
+    // Read it before changing the ascent: roomFix is derived from it, and by the time
+    // the message is built it has already become null.
+    const wanted = roomFix;
+    if (wanted == null) return;
+    project.ascent = SHEET_TO_WINDOW_Y + wanted;
+    touch();
+    statusLine = `room above set to ${wanted} (ascent ${project.ascent}) - the artwork is back on the sheet`;
+  }
+
   const windowBounds = $derived({ x: 0, y: 0, w: WINDOW_W, h: windowHeight(project.rows) });
 
   function alignSelection(mode: AlignMode): void {
@@ -2724,15 +2752,23 @@
         <div class="grid2">
           <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={project.rows} /></label>
           <label class="field"><span>shift</span><input type="number" bind:value={project.shift} /></label>
-          <label class="field"><span>ascent</span><input type="number" bind:value={project.ascent} /></label>
-          <label class="field" title="Space above the GUI on the sheet — the friendly face of the ascent. Raise it to fit a title panel above the window.">
-            <span>gui ↓</span>
+          <label
+            class="field"
+            title="The raw number gui.json declares. room above is this minus 13; they are one knob."
+          >
+            <span>ascent</span><input type="number" bind:value={project.ascent} />
+          </label>
+          <label
+            class="field"
+            title="Pixels of sheet that land above the chest window. The same number as the ascent, minus 13 — it buys room for a title panel; it never moves the window, which the client puts where it puts it."
+          >
+            <span>room above</span>
             <input
               type="number"
               min="-13"
               max="60"
-              value={project.ascent - 13}
-              oninput={(event) => { project.ascent = 13 + Number((event.target as HTMLInputElement).value); touch(); }}
+              value={roomAbove(project)}
+              oninput={(event) => { project.ascent = SHEET_TO_WINDOW_Y + Number((event.target as HTMLInputElement).value); touch(); }}
             />
           </label>
           <label class="field"><span>zoom</span><input type="number" min="1" max="8" bind:value={zoom} /></label>
@@ -2796,6 +2832,43 @@
           <p class="hint">Drawn over the artwork to trace or compare. Never exported.</p>
         {/if}
       </section>
+
+      {#if clipped.length > 0}
+        <section class="card alarm">
+          <div class="card-head">
+            <span class="label-mono">Falling off the sheet</span>
+            <span class="count">{clipped.length}</span>
+          </div>
+          <p class="hint">
+            These land outside the 256x256 canvas, and the renderer drops those pixels
+            without a word. The window never moves - raise <b>room above</b> to give the
+            artwork sheet rows above it, or bring it back down.
+          </p>
+          <ul class="list">
+            {#each clipped as entry}
+              <li class="hint">
+                <b>{entry.kind}</b> {entry.id} ({entry.layer}) -
+                {[
+                  entry.top ? `${entry.top}px off the top` : "",
+                  entry.bottom ? `${entry.bottom}px off the bottom` : "",
+                  entry.left ? `${entry.left}px off the left` : "",
+                  entry.right ? `${entry.right}px off the right` : "",
+                ].filter(Boolean).join(", ")}
+              </li>
+            {/each}
+          </ul>
+          {#if roomFix != null}
+            <button class="btn block sm" onclick={applyRoomFix}>
+              Set room above to {roomFix}
+            </button>
+          {:else}
+            <p class="hint">
+              No single value fits: something hangs off the top and something off the
+              bottom at once. That needs a shorter screen, not a different ascent.
+            </p>
+          {/if}
+        </section>
+      {/if}
 
       <section class="card">
         <div class="card-head"><span class="label-mono">Measured</span></div>

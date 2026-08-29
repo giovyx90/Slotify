@@ -20,15 +20,17 @@ al push sul server dev.
 3. [Il viewer: esplorare il pack](#3-il-viewer-esplorare-il-pack)
 4. [L'editor: creare una schermata](#4-leditor-creare-una-schermata)
 5. [Gli strumenti, uno per uno](#5-gli-strumenti-uno-per-uno)
-6. [Tastiera, annulla, selezioni e layer](#6-tastiera-annulla-selezioni-e-layer)
-7. [Colori: la palette e i colori con un nome](#7-colori-la-palette-e-i-colori-con-un-nome)
-8. [La libreria dei componenti e le immagini](#8-la-libreria-dei-componenti-e-le-immagini)
-9. [Il generatore di tag](#9-il-generatore-di-tag)
-10. [Spostare la GUI e l'ascent](#10-spostare-la-gui-e-lascent)
-11. [Esportare](#11-esportare)
-12. [Push sul server dev](#12-push-sul-server-dev)
-13. [Progetti e profili](#13-progetti-e-profili)
-14. [Problemi comuni](#14-problemi-comuni)
+6. [Stati: una GUI sopra l'altra](#6-stati-una-gui-sopra-laltra)
+7. [Pittura a mano](#7-pittura-a-mano)
+8. [Tastiera, annulla, selezioni e layer](#8-tastiera-annulla-selezioni-e-layer)
+9. [Colori: la palette e i colori con un nome](#9-colori-la-palette-e-i-colori-con-un-nome)
+10. [La libreria dei componenti e le immagini](#10-la-libreria-dei-componenti-e-le-immagini)
+11. [Il generatore di tag](#11-il-generatore-di-tag)
+12. [Spostare la GUI e l'ascent](#12-spostare-la-gui-e-lascent)
+13. [Esportare](#13-esportare)
+14. [Push sul server dev](#14-push-sul-server-dev)
+15. [Progetti e profili](#15-progetti-e-profili)
+16. [Problemi comuni](#16-problemi-comuni)
 
 ---
 
@@ -161,7 +163,93 @@ vuoti** (un item sopra coprirebbe l'arte).
 
 ---
 
-## 6. Tastiera, annulla, selezioni e layer
+## 6. Stati: una GUI sopra l'altra
+
+**Il problema.** Una schermata ha spesso piu' di uno stato: il pulsante premuto, la
+riga evidenziata, il badge "esaurito", il pannello di conferma. Rifare tutta la GUI per
+uno stato solo significa due copie da tenere allineate per sempre.
+
+**Come funziona in gioco.** Il titolo della cassa non contiene un glifo: ne contiene
+diversi. Base, poi ogni overlay preceduto da uno spacer che **torna indietro
+dell'advance del foglio disegnato prima**, cosi' tutti atterrano sulla stessa origine.
+Il client li disegna uno sopra l'altro e i pixel trasparenti dell'overlay sono la base
+che si vede attraverso.
+
+**Come si fa qui.** Il riquadro **States**: `+ State` crea un livello con **codepoint,
+texture e costante Java propri** e zero elementi. La base non viene copiata dentro —
+questo e' tutto il punto. Disegni solo la differenza.
+
+- Cliccando una riga cambi il livello su cui stai scrivendo: gli strumenti, la lista
+  layer, gli hotspot e l'advance in alto si riferiscono tutti a **quel** foglio.
+- Il pallino accanto a ogni stato lo tiene **visibile nell'anteprima** anche mentre
+  lavori sulla base. Uno stato che non vedi mentre disegni cio' che ci sta sotto e' uno
+  stato che disegnerai due volte.
+- ▲▼ cambiano l'ordine nel titolo, ⧉ duplica uno stato (per due stati che differiscono
+  in un dettaglio), × lo elimina — la texture gia' esportata resta sul disco.
+- L'**ascent** e' quella della base e non si tocca: entrambi sono disegnati in coordinate
+  finestra, e dare a uno stato un'ascent sua e' esattamente il modo in cui finisce tre
+  pixel piu' in alto.
+- L'anteprima **non** assume che gli overlay atterrino sull'origine: rifa' davvero
+  l'aritmetica del cursore del titolo. Se un advance e' sbagliato, lo stato si sposta
+  sulla tela esattamente di quanto si sposterebbe in gioco.
+
+**Export.** `Export to pack` scrive **tutti i fogli** — base e stati — e infila tutti i
+provider in `gui.json` in un colpo solo. Uno stato esportato senza la sua base e' un
+pack in disaccordo con se stesso. Lo scaffold Java ora riempie davvero le sue costanti
+overlay e chiama `title(shift, MAIN, STATE_X)`; i gruppi di slot di uno stato prendono
+il suo nome, cosi' due stati possono avere entrambi un gruppo "confirm" senza che uno
+diventi silenziosamente l'altro.
+
+---
+
+## 7. Pittura a mano
+
+Una GUI dipinta e' pixel art, e fino a ieri l'unico modo di mettere un pixel da qualche
+parte era trovare un elemento della forma giusta. Lo strumento **paint** disegna.
+
+Al primo tap nasce un **livello di pittura** grande quanto la finestra (o quanto il
+foglio, col bottone `+ sheet`). E' un elemento come gli altri: sta nella stessa pila,
+quindi puoi dipingere **sotto** un bottone o sopra; si sposta, si nasconde, si blocca e
+si riordina come tutto il resto; e finisce nello stesso foglio con lo stesso advance
+misurato.
+
+| Strumento | Cosa fa |
+|---|---|
+| **brush** / **eraser** | Pennello quadrato, punta da 1 a 8 |
+| **fill** | Riempimento a ventaglio, 4 vicini, corrispondenza esatta |
+| **line**, **rect**, **ellipse** | Trascini e vedi l'anteprima dal vivo; `filled shapes` le riempie |
+| **recolour** | Sostituisce ovunque il colore che tocchi con quello corrente |
+
+- **mirror X / Y**: dipinge anche i gemelli speculari. Con entrambi, quattro punti per
+  ogni tratto.
+- **pixel-perfect** (punta 1): toglie il pixel centrale dei gomiti a L. E' la differenza
+  fra una linea disegnata e una che sembra disegnata da un mouse.
+- **dither**: dipinge un pixel su due, la sfumatura povera della pixel art.
+- **stay on palette**: qualunque colore mescoli viene agganciato al piu' vicino che il
+  pack possiede davvero, cosi' una schermata non acquisisce di nascosto un dodicesimo
+  grigio.
+- Il **contagocce** ◉ prende un colore dall'arte gia' disegnata.
+
+I pixel stanno **dentro il file di progetto** (base64 di un PNG). Un file a fianco si
+diffarebbe meglio, ma la cronologia e' un'istantanea del progetto serializzato: pixel
+tenuti fuori sarebbero pixel che l'annulla non raggiunge, la bozza non salva e il
+copia-incolla non porta su un'altra schermata. Un tratto intero e' **un passo solo**
+della cronologia, perche' il base64 viene riscritto quando alzi il dito.
+
+> ⚠️ **Lo strip dei pixel vaganti mangia l'arte disegnata a mano.** Toglie i pixel opachi
+> con meno di due vicini: giusto per una schermata fatta di elementi (un pixel vagante a
+> destra gonfia l'advance e trascina fuori posto tutti gli overlay), sbagliato per un
+> disegno, dove la punta di una linea e un puntino isolato hanno un vicino solo. Nel
+> riquadro *Screen* c'e' l'interruttore **strip stray pixels**: se dipingi, spegnilo e
+> tieni d'occhio l'advance da solo. Con un livello di pittura acceso, l'editor te lo
+> ricorda.
+
+**Un livello di pittura grande quanto la finestra si prende tutti i click** in modalita'
+select: quando hai finito, mettigli il lucchetto nella lista layer.
+
+---
+
+## 8. Tastiera, annulla, selezioni e layer
 
 **Annulla.** `ctrl+Z` e `ctrl+shift+Z` (o `ctrl+Y`). La cronologia non registra ogni
 singolo movimento: aspetta che il progetto si fermi (circa un terzo di secondo), così un
@@ -206,7 +294,7 @@ smette di rubare la selezione a tutto ciò che ci sta sopra.
 
 ---
 
-## 7. Colori: la palette e i colori con un nome
+## 9. Colori: la palette e i colori con un nome
 
 **Un colore o il suo nome.** Un campo colore contiene o un valore letterale (`#D92632`)
 o un **riferimento** alla palette (`@brand.red`). Il riferimento è il punto di tutto: il
@@ -259,7 +347,7 @@ angoli, i bordi si ripetono, il centro si affianca — mai stirata.
 
 ---
 
-## 8. La libreria dei componenti e le immagini
+## 10. La libreria dei componenti e le immagini
 
 I componenti vivono accanto al pack (`tools/slotify/components/`), quindi ogni
 schermata futura riparte dagli stessi pezzi.
@@ -284,7 +372,7 @@ sessione — il progetto non se lo porta dietro e il foglio non lo cuoce mai den
 
 ---
 
-## 9. Il generatore di tag
+## 11. Il generatore di tag
 
 Il secondo tab della barra: testo → PNG in pixel, nello spirito dei tag generator
 classici.
@@ -300,28 +388,50 @@ nell'editor (es. l'insegna sopra una schermata).
 
 ---
 
-## 10. Spostare la GUI e l'ascent
+## 12. Spostare la GUI e l'ascent
 
-L'`ascent` è la posizione verticale del foglio: **13** = il foglio inizia esattamente
-dove inizia la finestra. Alzarla sposta la finestra **in basso nel canvas**, liberando
-spazio sopra per il pannello del titolo o un'insegna. In gioco non cambia nulla: la
-finestra atterra sempre al suo posto.
+> **`ascent` e `room above` sono lo stesso numero.** `room above = ascent − 13`. Non
+> sono due manopole: è una sola, scritta in due modi. Il campo che prima si chiamava
+> `gui ↓` si chiama ora `room above`, perché il vecchio nome suggeriva che spostasse la
+> GUI, e non sposta niente.
 
-Il campo **`gui ↓`** è la faccia umana della stessa manopola: è lo *spazio sopra la
-GUI* in pixel (`ascent − 13`). Alzalo, il margine dell'editor si allarga di
-conseguenza, e piazzi il panel sopra la finestra.
+**La finestra non si muove, mai.** Il client disegna la cassa dove la disegna, e nessun
+numero del pack la sposta. Quello che l'ascent decide è **quali righe del foglio 256
+finiscono sopra la finestra e quali sotto**: la regola è `rigaFinestra = rigaFoglio −
+ascent + 13`.
 
-**Se invece spingi la finestra oltre il foglio** (ascent sotto 13, o una finestra alta
-spostata troppo in giù), il PNG **non viene tagliato di netto**: la finestra viene
-**ricostruita più corta**, col bordo e il bevel richiusi sulla linea di taglio, e uno
-slot che finirebbe mozzato viene tolto intero.
+- `ascent 13` → riga 0 del foglio = riga 0 della finestra. Sopra la finestra non c'è
+  niente da disegnare, perché non c'è foglio lì.
+- `ascent 31` → riga 18 del foglio = riga 0 della finestra, e le prime 18 righe del
+  foglio cadono **sopra** la finestra. Quelle 18 righe sono lo spazio che ti sei
+  comprato per il pannello del titolo.
+
+Quindi: **`room above` non abbassa la GUI, compra spazio sopra.** Gli elementi restano
+dove li hai messi in coordinate finestra — è il *foglio* a scorrere sotto di loro, e
+l'export ci pensa da solo. Per questo il pannello resta centrato: non si è spostato
+nulla di ciò che vedi, si è solo aggiunta pellicola sopra.
+
+> ⚠️ **Se metti qualcosa sopra la finestra senza comprare lo spazio, i pixel spariscono
+> in silenzio.** Finiscono su righe negative del foglio, e `blit` le scarta senza dire
+> niente: il PNG esce, il pack carica, e al pannello manca la cima. L'editor ora se ne
+> accorge — compare il riquadro rosso **Falling off the sheet**, che dice quale elemento,
+> di quanti pixel e da che bordo, per **tutti gli stati** e non solo per quello aperto, e
+> offre un bottone che imposta `room above` al valore giusto. Quando un solo valore non
+> può bastare (qualcosa esce dalla cima e qualcos'altro dal fondo) te lo dice invece di
+> proporre una correzione che rompe l'altra metà.
+
+**La finestra stessa** (quando `bake window` è acceso) è l'unica cosa che non viene mai
+tagliata di netto: spinta oltre il foglio viene **ricostruita più corta**, col bordo e il
+bevel richiusi sulla linea di taglio, e uno slot che finirebbe mozzato viene tolto
+intero. Gli elementi no: quelli vengono ritagliati, ed è esattamente perché il taglio è
+invisibile che esiste l'avviso qui sopra.
 
 Ricorda la regola del server: l'ascent è un fatto del resource pack — **non si tara mai
 con lo shift**, e nessun comando in gioco può cambiarla.
 
 ---
 
-## 11. Esportare
+## 13. Esportare
 
 Dalla barra dell'editor e dalla card *Copy out*:
 
@@ -343,7 +453,7 @@ Dalla barra dell'editor e dalla card *Copy out*:
 
 ---
 
-## 12. Push sul server dev
+## 14. Push sul server dev
 
 La card **Push (dev)**:
 
@@ -359,7 +469,7 @@ mai un target che punti al pack di produzione.
 
 ---
 
-## 13. Progetti e profili
+## 15. Progetti e profili
 
 **Progetto** = una schermata: righe, codepoint, ascent, shift, elementi, hotspot, buchi,
 slot coperti. Si salva e si riapre dalla lista **Projects** nel viewer.
@@ -375,7 +485,7 @@ credenziali — quelli stanno in `*.profile.local.json` (gitignorato) e nel keyc
 
 ---
 
-## 14. Problemi comuni
+## 16. Problemi comuni
 
 | Sintomo | Causa e rimedio |
 |---|---|

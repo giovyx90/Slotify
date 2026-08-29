@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Tag a commit `v0.2.0` and push it, and the installer people actually download is built
+# here and attached to a GitHub Release. The binary never enters the repository: a 6 MB
+# installer committed per version stays in every clone forever, while a release asset is
+# a permanent URL that costs the clone nothing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Cargo's registry and the target directory: without this every tag pays the full
+      # cold compile of the whole Tauri dependency tree.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # The tests are the reason to trust the thing being shipped, so they gate it.
+      - run: npm test
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Slotify ${{ github.ref_name }}
+          releaseBody: |
+            Windows installer below — `.exe` is the usual one, `.msi` for deployment.
+
+            The hosted editor runs the same build with no install: see the README.
+          releaseDraft: true
+          prerelease: false
