@@ -54,6 +54,21 @@ The roadmap, each stage useful on its own:
   sprite, and place either with a tap — components live next to the pack
   (`tools/slotify/components/`) so every future screen starts from the same parts.
   Dragged elements edge-snap to each other; slots snap to the container grid.
+- **v4 — The editor as a tool you can work in** ✅: undo and redo over the whole
+  project (snapshot-based, in `engine/history.ts`, coalesced so a drag is one step); a
+  keyboard — arrows nudge, shift-arrows move a cell, duplicate, copy and paste layers
+  between screens, digits pick tools, the wheel zooms; eight resize handles on the
+  selection; ticked layers as a real multi-selection that drags, aligns, distributes
+  and matches size (`engine/align.ts`); layer order, hide and lock. **Named colours**:
+  a field holds `#RRGGBB` or `@brand.red` into a palette the profile carries and the
+  project may shadow, so moving one swatch moves every screen that named it; plus an
+  eyedropper, recent colours, a bevel-ramp preview and a contrast warning. The **plate**
+  tool draws a button at any size off the 18px lattice, converting both ways, with
+  single, double or flat edges, and text that aligns left, centre or right. An imported
+  PNG can also serve as an onion skin to trace against. Drafts survive the window
+  closing, exports back up what they overwrite and report how many pixels changed, and
+  the profile is discovered rather than hard-coded — with its declared geometry checked
+  against the engine's own constants.
 
 ## Using it
 
@@ -70,14 +85,32 @@ The roadmap, each stage useful on its own:
    with a colour per line; all text can use the pack font or the built-in 5×5 mono,
    with an optional directional shadow. Paint hotspots by tapping slots with a group
    active.
-4. **Library**: check some layers, name them, *save ✓* — or *Import PNG…* — then tap
-   any library entry and tap the canvas to place it.
+4. **Library**: check some layers, name them, *save ✓* — or *Import PNG…*, which opens
+   the platform's own file dialog — then tap any library entry and tap the canvas to
+   place it. *Reference* imports a PNG as an onion skin drawn over the artwork; it is
+   never exported.
 5. **Tag generator**, the second tab in the top bar, renders styled game-font text;
    download it or save it to the library as a sprite.
 6. **Export to pack** — in the editor's top bar, next to **Save project** — writes the
    stray-stripped PNG and splices the provider into `gui.json`; the *Copy out* card hands
    you the visuals/config YAML and the Java scaffold. **Push** writes a deploy plan under
    a target pack path and runs `nexo reload pack` over RCON.
+
+## Keys
+
+Everything is ignored while a text field has focus, where these keys already mean
+something else.
+
+| Key | Does |
+|---|---|
+| arrows / shift+arrows | Nudge the selection 1px / one 18px cell |
+| `ctrl+Z`, `ctrl+shift+Z` | Undo, redo |
+| `ctrl+D`, `ctrl+C`, `ctrl+V` | Duplicate; copy and paste layers, across screens too |
+| `ctrl+A`, `ctrl+S` | Tick every layer; save the project |
+| `Delete`, `Escape` | Delete the selection; drop the tool and the selection |
+| `1`…`9`, `0` | Pick a tool, in palette order |
+| `+` / `-`, wheel | Zoom |
+| `g`, `n` | Guides; raw slot numbers |
 
 ## The interface
 
@@ -99,9 +132,18 @@ desktop tool has to look the same with no network; see
 The engine knows the *mechanics* — font providers, cursor arithmetic, slot geometry,
 measurement. Everything project-specific (paths, codepoint ranges per module, palette,
 deploy targets) lives in a **profile** JSON you keep next to your pack. See
-[`profiles/example.profile.json`](profiles/example.profile.json). Machine-local values
-(absolute paths, hosts) belong in a gitignored `*.profile.local.json`; credentials never
-belong in any file — the deploy adapter will use the OS keychain.
+[`profiles/example.profile.json`](profiles/example.profile.json).
+
+The profile is discovered, not configured: `slotify.profile.json` at the repository
+root, then `tools/slotify/next.profile.json`, then any `*.profile.json` under
+`tools/slotify` or `profiles` — never a `*.local.json`. Machine-local values (absolute
+paths, hosts) belong in that gitignored `*.profile.local.json`; credentials never belong
+in any file — the deploy adapter will use the OS keychain.
+
+A profile's `geometry` and `spacers` blocks are *checked*, not obeyed: the engine's
+constants are derived from a measured production screen, and a profile that disagrees
+is reported on load while the engine still wins. The `palette` block is the pack's
+named colours, offered in every colour field and referenced from projects as `@id`.
 
 ## Development
 

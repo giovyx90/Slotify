@@ -20,14 +20,15 @@ al push sul server dev.
 3. [Il viewer: esplorare il pack](#3-il-viewer-esplorare-il-pack)
 4. [L'editor: creare una schermata](#4-leditor-creare-una-schermata)
 5. [Gli strumenti, uno per uno](#5-gli-strumenti-uno-per-uno)
-6. [Colori, testi e ombre](#6-colori-testi-e-ombre)
-7. [La libreria dei componenti](#7-la-libreria-dei-componenti)
-8. [Il generatore di tag](#8-il-generatore-di-tag)
-9. [Spostare la GUI e l'ascent](#9-spostare-la-gui-e-lascent)
-10. [Esportare](#10-esportare)
-11. [Push sul server dev](#11-push-sul-server-dev)
-12. [Progetti e profili](#12-progetti-e-profili)
-13. [Problemi comuni](#13-problemi-comuni)
+6. [Tastiera, annulla, selezioni e layer](#6-tastiera-annulla-selezioni-e-layer)
+7. [Colori: la palette e i colori con un nome](#7-colori-la-palette-e-i-colori-con-un-nome)
+8. [La libreria dei componenti e le immagini](#8-la-libreria-dei-componenti-e-le-immagini)
+9. [Il generatore di tag](#9-il-generatore-di-tag)
+10. [Spostare la GUI e l'ascent](#10-spostare-la-gui-e-lascent)
+11. [Esportare](#11-esportare)
+12. [Push sul server dev](#12-push-sul-server-dev)
+13. [Progetti e profili](#13-progetti-e-profili)
+14. [Problemi comuni](#14-problemi-comuni)
 
 ---
 
@@ -142,8 +143,9 @@ esportato.
 
 | Strumento | Cosa fa |
 |---|---|
-| **select** | Seleziona, trascina (gli elementi agganciano i bordi degli altri entro 3px — è così che i pezzi si "connettono"), rifinisce col **nudge pad** da 1px |
+| **select** | Seleziona, trascina (gli elementi agganciano i bordi degli altri entro 3px — è così che i pezzi si "connettono"), **ridimensiona dalle otto maniglie** della selezione, rifinisce col nudge pad o con le frecce |
 | **button** | **Tiles connettibili**: tap su una cella della griglia → bottone 1×1; tap sulla cella adiacente → cresce e si fonde (1×2, 1×3…); tap su una cella già sua → si restringe. Il bevel avvolge il contorno della regione fusa, non le singole celle |
+| **plate** | Lo stesso bottone **fuori dal reticolo da 18px**: premi e trascina, e il bottone è grande quanto il trascinamento. Un clic secco senza trascinare dà 40×18. Dall'ispettore si converte nei due sensi — «Snap onto the lattice» lo riaggancia alle celle che copre, «Free from the lattice» libera un gruppo di tiles tenendone il riquadro |
 | **infobox** | Piazza **l'infobox standard del progetto**: larghezza piena (176px), altezza nativa della texture dell'artista, agganciata alla riga toccata. Ridimensionabile dai campi w/h; oltre **12 tiles di larghezza si spezza** in una seconda box. Può stare **anche fuori dalla GUI** (a fianco o sotto, ovunque nel canvas 256) |
 | **slot** | Uno slot vanilla in più, agganciato alla griglia |
 | **erase** | **Scava un buco vero**: tap su qualsiasi regione della finestra (slot, fascia del titolo, gap, margini) → trasparenza piena. Dentro la griglia i vicini si richiudono coi loro bordi; fuori griglia il contorno della finestra si ridisegna attorno al buco. Tap di nuovo per ripristinare |
@@ -159,12 +161,88 @@ vuoti** (un item sopra coprirebbe l'arte).
 
 ---
 
-## 6. Colori, testi e ombre
+## 6. Tastiera, annulla, selezioni e layer
 
-**Colori.** Ogni elemento colorabile ha il suo picker `fill`. Ricolorando un bottone o
-un pannello, **le luci e le ombre non restano mai bianco/nero puri**: la highlight si
-schiarisce e vira verso il giallo, l'ombra si scurisce e vira verso il blu-viola — la
-regola classica dell'hue-shift in pixel art. Un fill grigio degrada alla rampa vanilla.
+**Annulla.** `ctrl+Z` e `ctrl+shift+Z` (o `ctrl+Y`). La cronologia non registra ogni
+singolo movimento: aspetta che il progetto si fermi (circa un terzo di secondo), così un
+trascinamento di quaranta pixel o una label digitata sono **un passo solo**. Le due
+frecce in alto a destra fanno la stessa cosa e si spengono quando non c'è più nulla da
+annullare.
+
+**Tastiera.** Tutto viene ignorato mentre stai scrivendo in un campo — lì `ctrl+Z`
+appartiene al campo e le frecce al cursore.
+
+| Tasto | Cosa fa |
+|---|---|
+| frecce | Sposta di 1px la selezione |
+| shift + frecce | Sposta di una cella intera (18px) |
+| `Canc` / `Backspace` | Elimina |
+| `ctrl+D` | Duplica (+2, +2) |
+| `ctrl+C` / `ctrl+V` | Copia e incolla layer, **anche fra schermate diverse** (viaggiano come JSON negli appunti di sistema) |
+| `ctrl+A` | Spunta tutti i layer |
+| `ctrl+S` | Salva il progetto |
+| `Esc` | Torna a select e deseleziona |
+| `1`…`9`, `0` | Sceglie lo strumento, nell'ordine della palette |
+| `+` / `-` e rotellina | Zoom |
+| `g` | Guide sì/no |
+| `n` | Numeri degli slot grezzi sovrimpressi (sono gli indici che useranno gli hotspot) |
+
+**Selezione multipla.** Le checkbox dei layer non servono più solo a comporre un
+componente: **due o più layer spuntati sono una selezione**, che si trascina, si sposta,
+si duplica, si elimina e si allinea insieme. Un gruppo trascinato aggancia i bordi come
+un blocco unico, quindi le distanze interne restano quelle che gli hai dato.
+
+**Allineare.** Il riquadro *Arrange* allinea i layer spuntati fra loro; con un solo
+elemento selezionato allinea **dentro la finestra** — è così che si centra un bottone
+senza dover selezionare anche la finestra. Ci sono anche «space across/down» (spazi
+uguali fra tre o più elementi) e «same width/height».
+
+**Ordine, occhio, lucchetto.** Ogni riga della lista layer ha ▲▼ per l'ordine di
+disegno (più in alto = disegnato prima = più dietro), un **occhio** e un **lucchetto**.
+Nascosto vuol dire nascosto **anche nell'export**: un layer invisibile nell'editor e
+presente nel foglio spedito è il modo in cui l'arte esce con dentro un pezzo che nessuno
+guarda da una settimana. Il lucchetto invece blocca solo i clic, così un pannello grande
+smette di rubare la selezione a tutto ciò che ci sta sopra.
+
+---
+
+## 7. Colori: la palette e i colori con un nome
+
+**Un colore o il suo nome.** Un campo colore contiene o un valore letterale (`#D92632`)
+o un **riferimento** alla palette (`@brand.red`). Il riferimento è il punto di tutto: il
+rosso del pack è **una riga sola** in `next.profile.json`, ogni schermata che lo usa dice
+il nome, e il giorno in cui quel rosso si sposta di mezzo punto **si spostano tutte** al
+primo export, senza riaprire niente. Un nome che nessuno definisce non fa esplodere
+nulla: l'elemento torna al colore di default e lo vedi sulla tela.
+
+**Da dove vengono i colori.** Sotto ogni campo ci sono le pastiglie della palette
+(quelle del profilo più quelle del progetto), e sotto ancora gli **ultimi otto colori**
+mescolati a mano. Il bottone ◉ arma il **contagocce**: il tap successivo sulla tela
+prende il colore del pixel — legge la schermata composta e non la tela, quindi un
+prelievo sopra la selezione non torna rosso.
+
+**La palette del progetto.** Il riquadro *Palette* elenca i colori che questa schermata
+si dà da sé; le pastiglie «from the pack» copiano qui un colore del profilo per poterlo
+modificare, «+ current fill» aggiunge il colore corrente, «Sample art» **estrae la
+palette** dall'immagine di riferimento importata (o dalla schermata come è disegnata) —
+utile quando i colori esistono in un PNG e non negli appunti di nessuno.
+
+**Bevel e contrasto.** Ricolorando un bottone o un pannello, **le luci e le ombre non
+restano mai bianco/nero puri**: la highlight si schiarisce e vira verso il giallo,
+l'ombra si scurisce e vira verso il blu-viola — la regola classica dell'hue-shift in
+pixel art. Un fill grigio degrada alla rampa vanilla. Le tre pastiglie accanto al campo
+`fill` **mostrano quella rampa prima di disegnare**, e sotto il campo `text` compare un
+avviso quando il contrasto fra scritta e piastra scende sotto 3:1: a quella dimensione
+la label non si legge.
+
+**Bordo del bottone.** Il campo `edge`: `single` è il bevel vanilla da 1px, `double` è
+lo stesso bevel profondo 2px — quello che serve a una piastra larga 90px, dove un pixel
+solo sembra una riga vagante e non un tasto — e `flat` toglie il bevel e lascia il solo
+contorno scuro, cioè un'etichetta invece di un tasto.
+
+**Allineamento del testo.** `align` (sinistra/centro/destra) più `text dx` e `text dy`
+per i casi che la griglia non sa esprimere. Un elemento che non dice niente si disegna
+esattamente dove si è sempre disegnato.
 
 **Font.** Due facce ovunque ci sia testo: **minecraft** (l'`ascii.png` vero del pack) e
 **mono 5×5** (il monospace integrato, avanzamento fisso 6px, spazio compreso).
@@ -173,21 +251,25 @@ regola classica dell'hue-shift in pixel art. Un fill grigio degrada alla rampa v
 `none` oppure una direzione (`below-right`, `below`, `right`, `above-left`, …).
 L'ombra è in stile vanilla: stesso testo, un pixel nella direzione scelta, colore al 25%.
 
-**Infobox.** Ogni riga ha **il suo colore** (picker per riga), l'interlinea è a scelta
+**Infobox.** Ogni riga ha **il suo colore** (picker per riga, più un menu con le
+pastiglie della palette per legarla a un colore con un nome), l'interlinea è a scelta
 (`gap` 2/3/4 px) e la **dimensione del testo** è 1× o **2× (lo standard del progetto)**.
 La skin è la **texture vera dell'artista** resa come ninepatch: gli angoli restano
 angoli, i bordi si ripetono, il centro si affianca — mai stirata.
 
 ---
 
-## 7. La libreria dei componenti
+## 8. La libreria dei componenti e le immagini
 
 I componenti vivono accanto al pack (`tools/slotify/components/`), quindi ogni
 schermata futura riparte dagli stessi pezzi.
 
 - **Crearli**: spunta le checkbox ✓ dei layer da raggruppare, scrivi un nome, **Save ✓**.
   Il gruppo viene ri-ancorato al suo angolo e salvato come **composito**.
-- **Importarli**: **Import PNG…** carica un'immagine come **sprite**.
+- **Importarli**: **Import PNG…** carica un'immagine come **sprite**. Nell'app
+  pacchettizzata si apre il dialogo nativo di Windows (non il selettore del webview:
+  quello consegnava un file che il livello filesystem dell'app non aveva il permesso di
+  leggere, ed era il motivo per cui l'import sembrava non fare nulla).
 - **Piazzarli**: tocca la voce in libreria, poi tocca il canvas. Un composito torna
   **elementi normali e modificabili** (la libreria è un punto di partenza, non un link);
   uno sprite si piazza 1:1.
@@ -195,9 +277,14 @@ schermata futura riparte dagli stessi pezzi.
   disco. Gli elementi già piazzati non vengono toccati; uno sprite orfano mostra un
   contorno rosso al posto dell'immagine.
 
+**Immagine di riferimento (onion skin).** Il riquadro *Reference* importa un PNG e lo
+disegna **sopra** l'arte a un'opacità e a uno scostamento regolabili: serve a ricalcare
+un mockup o a confrontarsi con la schermata che si sta sostituendo. Vive solo nella
+sessione — il progetto non se lo porta dietro e il foglio non lo cuoce mai dentro.
+
 ---
 
-## 8. Il generatore di tag
+## 9. Il generatore di tag
 
 Il secondo tab della barra: testo → PNG in pixel, nello spirito dei tag generator
 classici.
@@ -213,7 +300,7 @@ nell'editor (es. l'insegna sopra una schermata).
 
 ---
 
-## 9. Spostare la GUI e l'ascent
+## 10. Spostare la GUI e l'ascent
 
 L'`ascent` è la posizione verticale del foglio: **13** = il foglio inizia esattamente
 dove inizia la finestra. Alzarla sposta la finestra **in basso nel canvas**, liberando
@@ -234,7 +321,7 @@ con lo shift**, e nessun comando in gioco può cambiarla.
 
 ---
 
-## 10. Esportare
+## 11. Esportare
 
 Dalla barra dell'editor e dalla card *Copy out*:
 
@@ -256,7 +343,7 @@ Dalla barra dell'editor e dalla card *Copy out*:
 
 ---
 
-## 11. Push sul server dev
+## 12. Push sul server dev
 
 La card **Push (dev)**:
 
@@ -272,7 +359,7 @@ mai un target che punti al pack di produzione.
 
 ---
 
-## 12. Progetti e profili
+## 13. Progetti e profili
 
 **Progetto** = una schermata: righe, codepoint, ascent, shift, elementi, hotspot, buchi,
 slot coperti. Si salva e si riapre dalla lista **Projects** nel viewer.
@@ -288,7 +375,7 @@ credenziali — quelli stanno in `*.profile.local.json` (gitignorato) e nel keyc
 
 ---
 
-## 13. Problemi comuni
+## 14. Problemi comuni
 
 | Sintomo | Causa e rimedio |
 |---|---|
@@ -300,6 +387,11 @@ credenziali — quelli stanno in `*.profile.local.json` (gitignorato) e nel keyc
 | Collisione di codepoint segnalata nel viewer | Due provider sullo stesso carattere nello stesso font: riassegna uno dei due (il campo codepoint propone il primo libero) |
 | La schermata si apre grigia in gioco | Il codepoint è citato dal codice ma non ha provider in `gui.json` (riferimento pendente), oppure il pack non è stato ricaricato: `nexo reload pack` |
 | L'app installata non vede il pack | Al primo avvio va scelta la **radice del repo** (la cartella che contiene `pack-source/`), non `pack-source` stessa |
+| *"no Slotify profile here"* | Il repo scelto non ha un profilo: l'app cerca `slotify.profile.json` nella radice, poi `tools/slotify/next.profile.json`, poi qualunque `*.profile.json` sotto `tools/slotify` o `profiles` |
+| Il riquadro rosso *"Profile disagrees"* | Il blocco `geometry`/`spacers` del profilo dichiara numeri diversi da quelli del motore. Il motore vince comunque (le sue costanti sono misurate su una schermata vera): o correggi il profilo, o hai scoperto qualcosa che va indagato |
+| L'import PNG non fa niente (app pacchettizzata) | Risolto: erano tre cose insieme — le capability Tauri non concedevano i comandi filesystem, la scrittura non creava `tools/slotify/components/`, e il selettore file del webview consegnava un percorso fuori dallo scope. Se ricompare, il messaggio sulla barra di stato ora dice quale dei tre passi è fallito |
+| Hai chiuso l'app senza salvare | Riaprendo la schermata compare *Unsaved draft*: **Restore** rimette le modifiche (il file su disco resta com'era finché non salvi), **Discard** le butta |
+| Hai sovrascritto una texture per sbaglio | L'export lascia un `.bak` accanto al PNG e accanto a `gui.json`, e la barra di stato dice quanti pixel sono cambiati |
 
 ---
 
