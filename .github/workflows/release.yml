@@ -29,7 +29,7 @@ jobs:
 
       # Cargo's registry and the target directory: without this every tag pays the full
       # cold compile of the whole Tauri dependency tree.
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
