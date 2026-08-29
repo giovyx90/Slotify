@@ -17,6 +17,7 @@ import {
   type RGBA,
 } from "./paint";
 import { resolveColour, type Swatch } from "./palette";
+import { decodeLayer } from "./paintLayer";
 import { advanceOf, blit, makeRaster, scaleRaster, stripIsolated, type Raster } from "./raster";
 import type { Element, Project } from "./project";
 import { drawTileRegion, regionBBox, type TileCell } from "./tiles";
@@ -47,6 +48,11 @@ export interface RenderContext {
   panelSkin?: { raster: Raster; border: number };
   /** The pack's named colours. The project's own palette is consulted first. */
   palette?: Swatch[];
+  /**
+   * Decoded paint layers by element id. The editor keeps these so a stroke does not pay
+   * for a PNG decode per frame; without it the renderer decodes from the element itself.
+   */
+  paints?: Map<string, Raster>;
 }
 
 /**
@@ -266,6 +272,12 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
       drawInfoboxLines(sheet, context, element, x, y);
       break;
 
+    case "paint": {
+      const raster = context.paints?.get(element.id) ?? (element.paint ? decodeLayer(element.paint) : null);
+      if (raster) blit(sheet, raster, x, y);
+      break;
+    }
+
     case "sprite": {
       const raster = element.sprite ? context.sprites?.get(element.sprite) : undefined;
       if (raster) blit(sheet, raster, x, y);
@@ -334,7 +346,7 @@ export interface BakeResult {
 /** The export path: render, strip strays, measure, and describe the provider. */
 export function bakeSheet(project: Project, background?: Raster, context: RenderContext = {}): BakeResult {
   const sheet = renderSheet(project, background, context);
-  const straysRemoved = stripIsolated(sheet);
+  const straysRemoved = project.stripStrays === false ? 0 : stripIsolated(sheet);
 
   return {
     sheet,

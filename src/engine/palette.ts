@@ -104,6 +104,30 @@ export function contrastRatio(foreground: string, background: string): number {
 }
 
 /**
+ * The palette entry closest to a colour, by plain RGB distance. Used by the paint
+ * tool's "stay on palette" toggle: a colour mixed by hand snaps to the pack's nearest
+ * real one, so a screen cannot quietly acquire a twelfth grey.
+ */
+export function nearestSwatch(hex: string, palette: readonly Swatch[]): Swatch | undefined {
+  const target = parseHex(hex);
+  if (!target || palette.length === 0) return undefined;
+
+  let best: Swatch | undefined;
+  let bestDistance = Infinity;
+  for (const swatch of palette) {
+    const rgb = parseHex(swatch.hex);
+    if (!rgb) continue;
+    const distance =
+      (rgb[0] - target[0]) ** 2 + (rgb[1] - target[1]) ** 2 + (rgb[2] - target[2]) ** 2;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = swatch;
+    }
+  }
+  return best;
+}
+
+/**
  * The colours a picture is actually made of, commonest first — for lifting a palette off
  * the pack's own art instead of guessing hexes. Fully transparent pixels do not count,
  * and near-identical colours collapse into the one that appears more often.

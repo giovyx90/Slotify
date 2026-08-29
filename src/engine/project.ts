@@ -49,7 +49,7 @@ export const TileCellSchema = z.tuple([z.number().int().nonnegative(), z.number(
 
 export const ElementSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["slot", "button", "panel", "well", "text", "infobox", "sprite", "tiles"]),
+  kind: z.enum(["slot", "button", "panel", "well", "text", "infobox", "sprite", "tiles", "paint"]),
   /** Window coordinates, pixels. For `slot`, the 16×16 well interior's top-left. */
   x: z.number().int(),
   y: z.number().int(),
@@ -70,6 +70,14 @@ export const ElementSchema = z.object({
   borderColor: z.string().regex(COLOUR).optional(),
   /** Sprite elements: id of the library component whose PNG this draws. */
   sprite: z.string().optional(),
+  /**
+   * Paint elements: the hand-painted pixels, base64 of a PNG the size of the element.
+   *
+   * Inside the project file on purpose. A sidecar would diff better, but the history is
+   * a snapshot of the serialised project, so pixels kept outside it are pixels undo
+   * cannot reach, a draft cannot save and copy-paste cannot carry to another screen.
+   */
+  paint: z.string().optional(),
   /** Text shadow for label/text/infobox lines. Default none. */
   shadow: ShadowDirSchema.optional(),
   /** Which face renders the text. Default minecraft (the pack font). */
@@ -161,6 +169,16 @@ export const ProjectSchema = z.object({
    * the window contour redraws around.
    */
   holes: z.array(z.string()).optional(),
+  /**
+   * Remove opaque pixels with fewer than two opaque neighbours before measuring.
+   *
+   * On by default, and it should stay on for a screen built out of elements: one stray
+   * pixel far to the right inflates the advance and drags every overlay across the
+   * screen, invisibly. But it is a blunt rule — the tip of a hand-painted line, a single
+   * pixel dot, a one-pixel serif all have one neighbour — so a screen that is painted by
+   * hand can turn it off and watch the advance itself.
+   */
+  stripStrays: z.boolean().optional(),
   /**
    * Draw the (possibly carved) window into the exported sheet itself — how real NEXT
    * screens work over the erased generic_54 texture. Default for new screens.

@@ -17,11 +17,27 @@
     contrastRatio,
     extractPalette,
     freeSwatchId,
+    nearestSwatch,
     resolveColour,
     toHex,
     type Swatch,
   } from "../engine/palette";
-  import { hueShiftedBevels } from "../engine/paint";
+  import { hueShiftedBevels, type RGBA } from "../engine/paint";
+  import {
+    blankLayer,
+    decodeLayer,
+    ditherPoints,
+    ellipsePoints,
+    encodeLayer,
+    floodFill,
+    isCorner,
+    line as linePoints,
+    mirrored,
+    pixelAt as layerPixelAt,
+    rectanglePoints,
+    replaceColour,
+    stamp,
+  } from "../engine/paintLayer";
   import { encodePng } from "../engine/png";
   import {
     serializeProject,
@@ -114,11 +130,12 @@
     | "text"
     | "panel"
     | "well"
+    | "paint"
     | "hotspot";
   /** Also the digit shortcuts, in this order: 1 selects, 2 draws a button, and so on. */
   const TOOLS: Tool[] = [
     "select", "button", "plate", "infobox", "slot", "erase", "cover", "text", "panel", "well",
-    "hotspot",
+    "paint", "hotspot",
   ];
   let tool: Tool = $state("select");
 
@@ -199,6 +216,39 @@
    * The composed screen as last drawn, kept so the eyedropper reads the artwork and not
    * the chrome painted over it — a pick on a selected element must not return red.
    */
+  /*
+   * Painting.
+   *
+   * The pixels of the layer being worked on are kept decoded in `paintRasters` and
+   * mutated in place; the base64 in the element is rewritten once, when the stroke ends.
+   * That is what makes one stroke one undo step instead of forty, and what keeps a drag
+   * from paying for a PNG encode per pointer move.
+   */
+  type PaintTool = "brush" | "eraser" | "fill" | "line" | "rect" | "ellipse" | "recolour";
+  const PAINT_TOOLS: PaintTool[] = ["brush", "eraser", "fill", "line", "rect", "ellipse", "recolour"];
+  let paintTool: PaintTool = $state("brush");
+  let brushSize = $state(1);
+  let mirrorX = $state(false);
+  let mirrorY = $state(false);
+  let pixelPerfect = $state(true);
+  let ditherStroke = $state(false);
+  let shapeFilled = $state(false);
+  let paintColour: string = $state("#FFFFFF");
+  let paletteLock = $state(false);
+  let paintRasters = $state(new Map<string, Raster>());
+  let activePaintId: string | null = $state(null);
+  let stroke: {
+    id: string;
+    start: { x: number; y: number };
+    trail: { x: number; y: number }[];
+    before: Uint8Array;
+  } | null = null;
+
+  const paintLayers = $derived(elements.filter((element) => element.kind === "paint"));
+  const activePaint = $derived(
+    paintLayers.find((element) => element.id === activePaintId) ?? paintLayers[0] ?? null,
+  );
+
   /** The plate being dragged out right now, so a click without a drag still lands. */
   let creating: string | null = null;
   let composed: Raster | null = null;
@@ -279,6 +329,7 @@
     infoboxSkin,
     panelSkin,
     palette: packPalette,
+    paints: paintRasters,
   });
   const screenBake = $derived(bakeScreen(project, background, context));
   /** The sheet the top bar measures and the export writes: whichever layer is active. */
@@ -741,6 +792,147 @@
     };
   }
 
+  /** The decoded pixels of a paint element, decoded once and then kept. */
+  function rasterFor(element: Element): Raster {
+    const cached = paintRasters.get(element.id);
+    if (cached) return cached;
+    const raster = element.paint ? decodeLayer(element.paint) : blankLayer(element.w, element.h);
+    // A fresh copy: decodeLayer memoises, and painting into that would edit every
+    // element that happens to share the same pixels.
+    const own: Raster = { width: raster.width, height: raster.height, data: new Uint8Array(raster.data) };
+    paintRasters.set(element.id, own);
+    paintRasters = new Map(paintRasters);
+    return own;
+  }
+
+  /** Redraws from pixels mutated in place: a new Map is how the bake is told. */
+  function paintChanged(): void {
+    paintRasters = new Map(paintRasters);
+  }
+
+  function rgbaOfHex(hex: string): RGBA {
+    const [r, g, b, a] = rgbaOf(hex);
+    return [r, g, b, a];
+  }
+
+  const strokeColour = $derived(
+    paletteLock && palette.length > 0
+      ? (nearestSwatch(paintColour, palette)?.hex ?? paintColour)
+      : paintColour,
+  );
+
+  /** A new paint layer over the whole window, at the top of the stack. */
+  function addPaintLayer(coverSheet = false): Element {
+    const element: Element = {
+      id: nextId(),
+      kind: "paint",
+      x: 0,
+      y: 0,
+      w: coverSheet ? 256 : WINDOW_W,
+      h: coverSheet ? 256 : windowHeight(project.rows),
+    };
+    element.paint = encodeLayer(blankLayer(element.w, element.h));
+    setElements([...elements, element]);
+    activePaintId = element.id;
+    selectedId = element.id;
+    statusLine = `paint layer ${element.w}x${element.h} added - it sits in the stack like any layer`;
+    return element;
+  }
+
+  /** Writes the pixels back into the project: one call, one step in the history. */
+  function commitStroke(): void {
+    if (!stroke) return;
+    const element = elements.find((candidate) => candidate.id === stroke!.id);
+    const raster = paintRasters.get(stroke.id);
+    if (element && raster) {
+      element.paint = encodeLayer(raster);
+      touch();
+    }
+    stroke = null;
+  }
+
+  /** Paints one point (plus its mirrors) with the current nib. */
+  function paintPoint(raster: Raster, point: { x: number; y: number }, colour: RGBA): void {
+    for (const twin of mirrored(point, raster.width, raster.height, mirrorX, mirrorY)) {
+      stamp(raster, twin.x, twin.y, brushSize, colour);
+    }
+  }
+
+  function paintPoints(
+    raster: Raster,
+    points: readonly { x: number; y: number }[],
+    colour: RGBA,
+  ): void {
+    for (const point of ditherStroke ? ditherPoints(points) : points) paintPoint(raster, point, colour);
+  }
+
+  const CLEAR: RGBA = [0, 0, 0, 0];
+
+  /**
+   * A tap or a drag with a paint tool. Shape tools restore the pixels as they were at
+   * the start of the drag and redraw, which is a live preview for free.
+   */
+  function paintAt(point: { x: number; y: number }, beginning: boolean): void {
+    const element = activePaint ?? (beginning ? addPaintLayer() : null);
+    if (!element) return;
+    const raster = rasterFor(element);
+    const local = { x: point.x - element.x, y: point.y - element.y };
+    const colour = paintTool === "eraser" ? CLEAR : rgbaOfHex(strokeColour);
+
+    if (beginning) {
+      stroke = { id: element.id, start: local, trail: [local], before: new Uint8Array(raster.data) };
+    }
+    if (!stroke || stroke.id !== element.id) return;
+
+    switch (paintTool) {
+      case "fill":
+        if (beginning) floodFill(raster, local.x, local.y, colour);
+        break;
+
+      case "recolour": {
+        if (!beginning) break;
+        const target = layerPixelAt(raster, local.x, local.y);
+        if (target) replaceColour(raster, target, colour);
+        break;
+      }
+
+      case "line":
+      case "rect":
+      case "ellipse": {
+        raster.data.set(stroke.before);
+        const points =
+          paintTool === "line"
+            ? linePoints(stroke.start, local)
+            : paintTool === "rect"
+              ? rectanglePoints(stroke.start, local, shapeFilled)
+              : ellipsePoints(stroke.start, local, shapeFilled);
+        paintPoints(raster, points, colour);
+        break;
+      }
+
+      default: {
+        const previous = stroke.trail[stroke.trail.length - 1]!;
+        const segment = beginning ? [local] : linePoints(previous, local).slice(1);
+        for (const step of segment) {
+          stroke.trail.push(step);
+          // Pixel-perfect: an L-shaped knee is three pixels where two read cleaner, so
+          // the middle one is lifted again before the next goes down.
+          const count = stroke.trail.length;
+          if (pixelPerfect && brushSize === 1 && count >= 3) {
+            const [a, b, c] = [stroke.trail[count - 3]!, stroke.trail[count - 2]!, stroke.trail[count - 1]!];
+            if (isCorner(a, b, c)) {
+              paintPoint(raster, b, CLEAR);
+              stroke.trail.splice(count - 2, 1);
+            }
+          }
+          paintPoints(raster, [step], colour);
+        }
+      }
+    }
+
+    paintChanged();
+  }
+
   /** Arms the eyedropper: the next tap on the canvas answers into this field. */
   function armEyedropper(apply: (hex: string) => void): void {
     eyedropper = apply;
@@ -950,6 +1142,12 @@
       return;
     }
 
+    if (tool === "paint") {
+      paintAt(point, true);
+      (event.target as HTMLElement).setPointerCapture(event.pointerId);
+      return;
+    }
+
     if (tool === "button") {
       tapTile(point, "button");
       return;
@@ -1052,6 +1250,7 @@
 
     const hit = hitElement(point.x, point.y);
     selectedId = hit?.id ?? null;
+    if (hit?.kind === "paint") activePaintId = hit.id;
     if (hit && hit.kind !== "tiles") {
       // Dragging one of several ticked layers drags all of them: the tick list is the
       // multi-selection, the same one the align buttons and a saved component read.
@@ -1082,6 +1281,10 @@
   function onPointerMove(event: PointerEvent): void {
     const point = windowPoint(event);
     cursor = point;
+    if (stroke) {
+      paintAt(point, false);
+      return;
+    }
     if (!drag) return;
 
     if (drag.kind === "resize") {
@@ -1165,6 +1368,7 @@
   }
 
   function onPointerUp(): void {
+    if (stroke) commitStroke();
     if (creating) {
       const element = elements.find((candidate) => candidate.id === creating);
       if (element && element.w < 6 && element.h < 6) {
@@ -1873,6 +2077,98 @@
         </p>
       </section>
 
+      {#if tool === "paint" || paintLayers.length > 0}
+        <section class="card">
+          <div class="card-head">
+            <span class="label-mono">Paint</span>
+            <span class="count">{paintLayers.length}</span>
+          </div>
+
+          {#if paintLayers.length === 0}
+            <p class="hint">
+              Tap the canvas with the paint tool and a layer the size of the window
+              appears. It sits in the stack like anything else, so you can paint under a
+              button or over it.
+            </p>
+          {:else}
+            <label class="field"><span>layer</span>
+              <select
+                value={activePaint?.id ?? ""}
+                onchange={(event) => (activePaintId = (event.target as HTMLSelectElement).value)}
+              >
+                {#each paintLayers as element}
+                  <option value={element.id}>{element.id} - {element.w}x{element.h}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+
+          <div class="palette top">
+            {#each PAINT_TOOLS as candidate}
+              <button
+                class="tool"
+                class:active={paintTool === candidate}
+                onclick={() => { paintTool = candidate; tool = "paint"; }}
+              >{candidate}</button>
+            {/each}
+          </div>
+
+          <div class="grid2 top">
+            <label class="field"><span>nib</span>
+              <input type="number" min="1" max="8" bind:value={brushSize} />
+            </label>
+            <label class="field"><span>colour</span>
+              <input
+                type="color"
+                value={strokeColour}
+                oninput={(event) => (paintColour = (event.target as HTMLInputElement).value.toUpperCase())}
+              />
+            </label>
+          </div>
+
+          {#if palette.length > 0}
+            <div class="swatches top">
+              {#each palette as entry}
+                <button
+                  class="chipswatch"
+                  class:on={strokeColour.toUpperCase() === entry.hex.toUpperCase()}
+                  style:background={entry.hex}
+                  title={`${entry.name} (@${entry.id})`}
+                  aria-label={entry.name}
+                  onclick={() => (paintColour = entry.hex)}
+                ></button>
+              {/each}
+            </div>
+          {/if}
+
+          <label class="check"><input type="checkbox" bind:checked={mirrorX} /> mirror X</label>
+          <label class="check"><input type="checkbox" bind:checked={mirrorY} /> mirror Y</label>
+          <label class="check">
+            <input type="checkbox" bind:checked={pixelPerfect} /> pixel-perfect (nib 1)
+          </label>
+          <label class="check"><input type="checkbox" bind:checked={ditherStroke} /> dither</label>
+          <label class="check"><input type="checkbox" bind:checked={shapeFilled} /> filled shapes</label>
+          <label class="check" title="Snap whatever you mix to the nearest colour the pack owns">
+            <input type="checkbox" bind:checked={paletteLock} disabled={palette.length === 0} />
+            stay on palette
+          </label>
+
+          <div class="row2">
+            <button class="btn sm" onclick={() => addPaintLayer(false)}>+ window</button>
+            <button class="btn sm" onclick={() => addPaintLayer(true)}>+ sheet</button>
+            <button
+              class="btn sm"
+              title="Pick a colour off the artwork"
+              onclick={() => armEyedropper((hex) => (paintColour = hex))}
+            >&#x25C9;</button>
+          </div>
+          <p class="hint">
+            A full-window paint layer swallows clicks in select mode - lock it in the
+            layer list once you are done with it.
+          </p>
+        </section>
+      {/if}
+
       <section class="card">
         <div class="card-head">
           <span class="label-mono">Library</span>
@@ -2013,7 +2309,11 @@
                 onclick={() => (selectedId = element.id)}
               >
                 <span class="truncate">
-                  {element.kind === "tiles" ? `${element.tileKind} ×${element.cells?.length ?? 0}` : element.kind}{element.label ? ` “${element.label}”` : ""}
+                  {element.kind === "tiles"
+                    ? `${element.tileKind} ×${element.cells?.length ?? 0}`
+                    : element.kind === "paint"
+                      ? `paint ${element.w}×${element.h}`
+                      : element.kind}{element.label ? ` “${element.label}”` : ""}
                 </span>
                 <span class="trail">{element.x},{element.y}</span>
               </button>
@@ -2443,6 +2743,23 @@
         <label class="check">
           <input type="checkbox" bind:checked={showSlotNumbers} /> raw slot numbers
         </label>
+        <label
+          class="check"
+          title="Off, nothing is removed and the advance is yours to watch"
+        >
+          <input
+            type="checkbox"
+            checked={project.stripStrays !== false}
+            onchange={(event) => { project.stripStrays = (event.target as HTMLInputElement).checked; touch(); }}
+          /> strip stray pixels
+        </label>
+        {#if paintLayers.length > 0 && project.stripStrays !== false}
+          <p class="hint">
+            This screen is painted by hand and stray-stripping is on: the tip of a line
+            and a lone dot both have one neighbour, and both are being removed. The
+            counter above says how many.
+          </p>
+        {/if}
         <label class="check"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
         <p class="hint">
           Erase tool: tap any part of the window — a slot, the top band, a margin — and it
