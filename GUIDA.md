@@ -216,9 +216,8 @@ misurato.
 | Strumento | Cosa fa |
 |---|---|
 | **brush** / **eraser** | Pennello quadrato, punta da 1 a 8 |
-| **fill** | Riempimento a ventaglio, 4 vicini, corrispondenza esatta |
+| **fill** | Tre modi, e li scegli: **connected** (la macchia che tocchi e quello che la tocca, stesso colore), **replace** (quel colore ovunque nel livello, attaccato o no), **all** (tutto il livello, trasparenza compresa) |
 | **line**, **rect**, **ellipse** | Trascini e vedi l'anteprima dal vivo; `filled shapes` le riempie |
-| **recolour** | Sostituisce ovunque il colore che tocchi con quello corrente |
 
 - **mirror X / Y**: dipinge anche i gemelli speculari. Con entrambi, quattro punti per
   ogni tratto.
@@ -229,6 +228,16 @@ misurato.
   pack possiede davvero, cosi' una schermata non acquisisce di nascosto un dodicesimo
   grigio.
 - Il **contagocce** ◉ prende un colore dall'arte gia' disegnata.
+
+**Un tratto = un annulla.** Tutto il resto dell'editor aspetta un terzo di secondo che
+il progetto si fermi prima di prendere l'istantanea — è quello che trasforma una label
+digitata in una voce sola invece di dodici. Dipingere è il caso opposto: le pennellate
+arrivano più in fretta di così, e lo stesso ritardo ne fonderebbe una manciata, con un
+solo `ctrl+Z` a cancellarle tutte. Una pennellata è un'unità di lavoro, quindi viene
+registrata nel momento in cui alzi il dito.
+
+C'è anche **Clear this layer**, che svuota il livello attivo senza uscire dallo
+strumento (ed è a sua volta un passo solo dell'annulla).
 
 I pixel stanno **dentro il file di progetto** (base64 di un PNG). Un file a fianco si
 diffarebbe meglio, ma la cronologia e' un'istantanea del progetto serializzato: pixel

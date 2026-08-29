@@ -167,6 +167,12 @@ export function floodFill(raster: Raster, x: number, y: number, colour: RGBA): n
   return filled;
 }
 
+/** Every pixel of the layer, transparent ones included. */
+export function fillAll(raster: Raster, colour: RGBA): number {
+  for (let index = 0; index < raster.data.length; index += 4) raster.data.set(colour, index);
+  return raster.width * raster.height;
+}
+
 /** Replaces one colour everywhere it appears — recolouring without reselecting. */
 export function replaceColour(raster: Raster, from: RGBA, to: RGBA): number {
   let changed = 0;

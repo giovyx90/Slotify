@@ -30,6 +30,7 @@
     ditherPoints,
     ellipsePoints,
     encodeLayer,
+    fillAll,
     floodFill,
     isCorner,
     line as linePoints,
@@ -226,8 +227,19 @@
    * That is what makes one stroke one undo step instead of forty, and what keeps a drag
    * from paying for a PNG encode per pointer move.
    */
-  type PaintTool = "brush" | "eraser" | "fill" | "line" | "rect" | "ellipse" | "recolour";
-  const PAINT_TOOLS: PaintTool[] = ["brush", "eraser", "fill", "line", "rect", "ellipse", "recolour"];
+  type PaintTool = "brush" | "eraser" | "fill" | "line" | "rect" | "ellipse";
+  const PAINT_TOOLS: PaintTool[] = ["brush", "eraser", "fill", "line", "rect", "ellipse"];
+  /**
+   * What "fill" means, because it means three different things and every paint tool
+   * that pretends otherwise makes you go looking for the other two.
+   */
+  type FillMode = "connected" | "replace" | "all";
+  const FILL_MODES: { id: FillMode; label: string; hint: string }[] = [
+    { id: "connected", label: "connected", hint: "The patch you tap and whatever touches it, same colour" },
+    { id: "replace", label: "replace", hint: "That colour everywhere in the layer, touching or not" },
+    { id: "all", label: "all", hint: "The whole layer, transparency included" },
+  ];
+  let fillMode: FillMode = $state("connected");
   let paintTool: PaintTool = $state("brush");
   let brushSize = $state(1);
   let mirrorX = $state(false);
@@ -841,16 +853,37 @@
     return element;
   }
 
-  /** Writes the pixels back into the project: one call, one step in the history. */
+  /**
+   * Writes the pixels back into the project, and records the step immediately.
+   *
+   * Everything else in the editor settles for a third of a second before the history
+   * takes a snapshot, which is what turns a typed label into one entry instead of
+   * twelve. Painting is the opposite case: strokes land faster than that, so the same
+   * delay would quietly merge a handful of them and one ctrl+Z would undo the lot.
+   * A stroke is a unit of work, so it is committed the moment the pointer lifts.
+   */
   function commitStroke(): void {
     if (!stroke) return;
     const element = elements.find((candidate) => candidate.id === stroke!.id);
     const raster = paintRasters.get(stroke.id);
-    if (element && raster) {
-      element.paint = encodeLayer(raster);
-      touch();
-    }
     stroke = null;
+    if (!element || !raster) return;
+    element.paint = encodeLayer(raster);
+    touch();
+    flushHistory();
+  }
+
+  /** Empties the active layer without leaving the paint tool. */
+  function clearPaintLayer(): void {
+    const element = activePaint;
+    if (!element) return;
+    const raster = rasterFor(element);
+    fillAll(raster, CLEAR);
+    element.paint = encodeLayer(raster);
+    paintChanged();
+    touch();
+    flushHistory();
+    statusLine = "layer cleared";
   }
 
   /** Paints one point (plus its mirrors) with the current nib. */
@@ -887,14 +920,18 @@
     if (!stroke || stroke.id !== element.id) return;
 
     switch (paintTool) {
-      case "fill":
-        if (beginning) floodFill(raster, local.x, local.y, colour);
-        break;
-
-      case "recolour": {
+      case "fill": {
         if (!beginning) break;
-        const target = layerPixelAt(raster, local.x, local.y);
-        if (target) replaceColour(raster, target, colour);
+        if (fillMode === "all") {
+          fillAll(raster, colour);
+        } else if (fillMode === "replace") {
+          // Whatever is under the tap is the colour being replaced — transparent
+          // included, which is how you flood everything that was never painted.
+          const target = layerPixelAt(raster, local.x, local.y);
+          if (target) replaceColour(raster, target, colour);
+        } else {
+          floodFill(raster, local.x, local.y, colour);
+        }
         break;
       }
 
@@ -2141,6 +2178,20 @@
             {/each}
           </div>
 
+          {#if paintTool === "fill"}
+            <div class="palette top">
+              {#each FILL_MODES as mode}
+                <button
+                  class="tool"
+                  class:active={fillMode === mode.id}
+                  title={mode.hint}
+                  onclick={() => (fillMode = mode.id)}
+                >{mode.label}</button>
+              {/each}
+            </div>
+            <p class="hint">{FILL_MODES.find((mode) => mode.id === fillMode)?.hint}</p>
+          {/if}
+
           <div class="grid2 top">
             <label class="field"><span>nib</span>
               <input type="number" min="1" max="8" bind:value={brushSize} />
@@ -2190,6 +2241,9 @@
               onclick={() => armEyedropper((hex) => (paintColour = hex))}
             >&#x25C9;</button>
           </div>
+          {#if activePaint}
+            <button class="btn block sm danger" onclick={clearPaintLayer}>Clear this layer</button>
+          {/if}
           <p class="hint">
             A full-window paint layer swallows clicks in select mode - lock it in the
             layer list once you are done with it.

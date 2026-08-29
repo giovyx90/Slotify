@@ -6,6 +6,7 @@ import {
   ditherPoints,
   ellipsePoints,
   encodeLayer,
+  fillAll,
   floodFill,
   isCorner,
   line,
@@ -193,5 +194,21 @@ describe("stray stripping and hand-painted art", () => {
     // project's ascent is 13, so sheet coordinates equal window ones.
     const index = (15 * baked.sheet.width + 15) * 4;
     expect(baked.sheet.data[index + 3]).toBe(255);
+  });
+});
+
+describe("fillAll", () => {
+  it("covers the layer, transparency included", () => {
+    const raster = blankLayer(3, 2);
+    expect(fillAll(raster, RED)).toBe(6);
+    expect(pixelAt(raster, 0, 0)).toEqual(RED);
+    expect(pixelAt(raster, 2, 1)).toEqual(RED);
+  });
+
+  it("can wipe a layer back to nothing", () => {
+    const raster = blankLayer(2, 2);
+    setPixel(raster, 1, 1, RED);
+    fillAll(raster, CLEAR);
+    expect(pixelAt(raster, 1, 1)).toEqual(CLEAR);
   });
 });
