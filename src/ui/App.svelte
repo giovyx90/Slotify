@@ -187,6 +187,25 @@
     overlaySheets = sheets;
   }
 
+  /**
+   * Writes the guess down. Nothing needs it — the layout is inferred again next time —
+   * but a profile on disk is where a pack's palette and codepoint ranges then have a
+   * home, and it stops the guess from being re-made on a folder that has grown.
+   */
+  async function writeInferredProfile(): Promise<void> {
+    if (!pack) return;
+    const path = joinPath(pack.root, "slotify.profile.json");
+    const profile = { ...pack.profile, name: pack.root.split("/").pop() || pack.profile.name };
+    try {
+      const text = `${JSON.stringify(profile, null, 2)}\n`;
+      await backend.write(path, new TextEncoder().encode(text));
+      status = `wrote ${path}`;
+      await openRoot(pack.root);
+    } catch (error) {
+      status = `could not write the profile: ${error}`;
+    }
+  }
+
   async function refreshProjects(): Promise<void> {
     if (!pack) return;
     try {
@@ -395,6 +414,23 @@
             {/each}
           </nav>
         </section>
+
+        {#if pack.inferred}
+          <section class="card">
+            <div class="card-head"><span class="label-mono">Layout guessed</span></div>
+            <p class="hint">
+              No profile in this folder, so the layout was worked out from it: {pack.inferred}.
+              Fonts are being read from <code>{pack.profile.paths.fontDir}</code>.
+            </p>
+            <button class="btn block sm" onclick={writeInferredProfile}>
+              Write slotify.profile.json
+            </button>
+            <p class="hint">
+              Optional — it only makes the guess explicit, and gives the pack somewhere to
+              keep its palette and its codepoint ranges.
+            </p>
+          </section>
+        {/if}
 
         <p class="root hint">{pack.root}</p>
       {:else}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { findProfile, geometryWarnings, type Profile } from "./model";
+import { findProfile, geometryWarnings, inferLayout, loadPack, type Profile } from "./model";
 import type { DirEntry, FsBackend } from "../platform/fs";
 
 /** A filesystem that is only the files it is given, so discovery can be pinned down. */
@@ -93,5 +93,82 @@ describe("geometryWarnings", () => {
 
   it("says nothing at all when the profile declares no geometry", () => {
     expect(geometryWarnings(base)).toEqual([]);
+  });
+});
+
+describe("inferLayout", () => {
+  const FONT = "assets/minecraft/font/default.json";
+
+  it("recognises a plain resource pack, fonts at the root", async () => {
+    const layout = await inferLayout(fakeBackend({ [`/repo/${FONT}`]: "{}" }), "/repo");
+    expect(layout.fontDir).toBe("assets/minecraft/font");
+    expect(layout.textureRoots).toEqual([""]);
+  });
+
+  it("recognises one directory per category at the root", async () => {
+    const backend = fakeBackend({
+      [`/repo/locker/${FONT}`]: "{}",
+      [`/repo/bank/${FONT}`]: "{}",
+    });
+    const layout = await inferLayout(backend, "/repo");
+    expect(layout.fontDir).toBe("bank/assets/minecraft/font");
+    expect(layout.textureRoots).toEqual([""]);
+  });
+
+  it("prefers _shared, which is where a categorised pack keeps the common font", async () => {
+    const backend = fakeBackend({
+      [`/repo/locker/${FONT}`]: "{}",
+      [`/repo/_shared/${FONT}`]: "{}",
+    });
+    expect((await inferLayout(backend, "/repo")).fontDir).toBe("_shared/assets/minecraft/font");
+  });
+
+  it("finds categories one container down, the NEXT monorepo shape", async () => {
+    const backend = fakeBackend({
+      [`/repo/pack-source/_shared/${FONT}`]: "{}",
+      [`/repo/pack-source/locker/${FONT}`]: "{}",
+    });
+    const layout = await inferLayout(backend, "/repo");
+    expect(layout.fontDir).toBe("pack-source/_shared/assets/minecraft/font");
+    expect(layout.textureRoots).toEqual(["pack-source"]);
+  });
+
+  it("assumes the plain shape for an empty folder, which is a pack about to start", async () => {
+    const layout = await inferLayout(fakeBackend({}), "/repo");
+    expect(layout.fontDir).toBe("assets/minecraft/font");
+    expect(layout.note).toContain("nothing found");
+  });
+});
+
+describe("loadPack without a profile", () => {
+  it("opens a plain pack instead of refusing", async () => {
+    const backend = fakeBackend({
+      "/repo/assets/minecraft/font/gui.json": JSON.stringify({ providers: [] }),
+    });
+    const pack = await loadPack(backend, "/repo");
+    expect(pack.profilePath).toBeNull();
+    expect(pack.inferred).toContain("plain resource pack");
+    expect(pack.profile.paths.fontDir).toBe("assets/minecraft/font");
+  });
+
+  it("opens an empty folder, so a pack can be started from nothing", async () => {
+    const pack = await loadPack(fakeBackend({}), "/repo");
+    expect(pack.fonts).toEqual([]);
+    expect(pack.screens).toEqual([]);
+  });
+
+  it("still prefers a profile that is actually written down", async () => {
+    const backend = fakeBackend({
+      "/repo/slotify.profile.json": JSON.stringify({
+        version: 1,
+        name: "Written",
+        paths: { fontDir: "custom/font", guiFont: "gui.json", textureRoots: ["x"] },
+      }),
+      "/repo/assets/minecraft/font/gui.json": "{}",
+    });
+    const pack = await loadPack(backend, "/repo");
+    expect(pack.profilePath).toBe("slotify.profile.json");
+    expect(pack.inferred).toBeNull();
+    expect(pack.profile.name).toBe("Written");
   });
 });

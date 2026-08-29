@@ -95,6 +95,109 @@ export async function findProfile(backend: FsBackend, root: string): Promise<str
   return null;
 }
 
+const FONT_TAIL = "assets/minecraft/font";
+
+/** Does this directory exist? The backends all report a missing one by throwing. */
+async function hasDir(backend: FsBackend, path: string): Promise<boolean> {
+  try {
+    await backend.list(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Sorted, so the inferred font directory is the same one on every machine. */
+async function subdirectories(backend: FsBackend, path: string): Promise<string[]> {
+  try {
+    return (await backend.list(path))
+      .filter((entry) => entry.dir)
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export interface InferredLayout {
+  fontDir: string;
+  textureRoots: string[];
+  /** Said to the user, because a guess they cannot see is worse than no guess. */
+  note: string;
+}
+
+/**
+ * A profile worked out from the folder itself.
+ *
+ * A profile is how a pack says where its fonts and textures live, and for the NEXT
+ * monorepo — categories under `pack-source/` — it has to. But most packs are the plain
+ * `assets/minecraft/...` shape, and demanding a hand-written JSON before the tool will
+ * open one turns "choose a folder" into "read the README first". So the layout is
+ * inferred, and the guess is shown rather than hidden.
+ *
+ * Three shapes, deepest last: fonts at the root; fonts one level down, one directory per
+ * category; fonts two levels down, categories under a container. An empty folder infers
+ * the flat shape, which is what a pack being started from scratch will become.
+ */
+export async function inferLayout(backend: FsBackend, root: string): Promise<InferredLayout> {
+  if (await hasDir(backend, joinPath(root, FONT_TAIL))) {
+    return {
+      fontDir: FONT_TAIL,
+      textureRoots: [""],
+      note: "fonts at the root: a plain resource pack",
+    };
+  }
+
+  const top = await subdirectories(backend, root);
+
+  // One level down: <root>/<category>/assets/minecraft/font
+  const categories: string[] = [];
+  for (const name of top) {
+    if (await hasDir(backend, joinPath(root, name, FONT_TAIL))) categories.push(name);
+  }
+  if (categories.length > 0) {
+    return {
+      fontDir: joinPath(preferShared(categories), FONT_TAIL),
+      textureRoots: [""],
+      note: `fonts under ${categories.length} categor${categories.length === 1 ? "y" : "ies"} at the root`,
+    };
+  }
+
+  // Two levels down: <root>/<container>/<category>/assets/minecraft/font
+  for (const container of top) {
+    const inner: string[] = [];
+    for (const name of await subdirectories(backend, joinPath(root, container))) {
+      if (await hasDir(backend, joinPath(root, container, name, FONT_TAIL))) inner.push(name);
+    }
+    if (inner.length > 0) {
+      return {
+        fontDir: joinPath(container, preferShared(inner), FONT_TAIL),
+        textureRoots: [container],
+        note: `categories under ${container}/`,
+      };
+    }
+  }
+
+  return {
+    fontDir: FONT_TAIL,
+    textureRoots: [""],
+    note: "nothing found yet — assuming a plain resource pack",
+  };
+}
+
+/** `_shared` is where a multi-category pack keeps the font everything else reuses. */
+function preferShared(names: readonly string[]): string {
+  return names.includes("_shared") ? "_shared" : names[0]!;
+}
+
+export function inferredProfile(layout: InferredLayout): Profile {
+  return {
+    version: 1,
+    name: "Inferred from the folder",
+    paths: { fontDir: layout.fontDir, guiFont: "gui.json", textureRoots: layout.textureRoots },
+  };
+}
+
 /**
  * What the profile claims about the chest, checked against what the engine knows. A
  * disagreement is reported, never obeyed: the constants come from a shipped screen that
@@ -142,8 +245,10 @@ export interface ScreenEntry {
 
 export interface LoadedPack {
   root: string;
-  /** Which candidate file the profile came from — shown, so the answer is never a guess. */
-  profilePath: string;
+  /** Which candidate file the profile came from, or null when it was inferred. */
+  profilePath: string | null;
+  /** How the layout was worked out, when no profile file said so. Null when one did. */
+  inferred: string | null;
   profile: Profile;
   /** Disagreements between the profile and the engine. Reported, never obeyed. */
   warnings: string[];
@@ -155,16 +260,22 @@ export interface LoadedPack {
 
 export async function loadPack(backend: FsBackend, root: string, profilePath?: string): Promise<LoadedPack> {
   const path = profilePath ?? (await findProfile(backend, root));
+
+  let profile: Profile;
+  let inferred: string | null = null;
   if (path == null) {
-    throw new Error(
-      `no Slotify profile here. Looked for ${PROFILE_CANDIDATES.join(", ")}, then any ` +
-        `*.profile.json under ${PROFILE_DIRS.join(" or ")}.`,
-    );
+    // No profile written down: work the layout out and say so. Refusing here is what
+    // made "choose a folder" mean "write a JSON file first".
+    const layout = await inferLayout(backend, root);
+    profile = inferredProfile(layout);
+    inferred = layout.note;
+  } else {
+    profile = JSON.parse(await backend.readText(joinPath(root, path))) as Profile;
   }
-  const profile = JSON.parse(await backend.readText(joinPath(root, path))) as Profile;
 
   const fontDir = joinPath(root, profile.paths.fontDir);
-  const names = (await backend.list(fontDir))
+  // A folder with no fonts in it yet is a pack about to be started, not an error.
+  const names = (await backend.list(fontDir).catch(() => []))
     .filter((entry) => !entry.dir && entry.name.endsWith(".json") && !entry.name.includes(".bak"))
     .map((entry) => entry.name);
 
@@ -200,6 +311,7 @@ export async function loadPack(backend: FsBackend, root: string, profilePath?: s
   return {
     root,
     profilePath: path,
+    inferred,
     profile,
     warnings: geometryWarnings(profile),
     fonts,
@@ -224,10 +336,12 @@ export async function resolveTexture(
   const candidates: string[] = [];
 
   for (const textureRoot of pack.profile.paths.textureRoots) {
-    // The straightforward category, the company/companies exception, then _shared.
+    // The straightforward category, the company/companies exception, then _shared —
+    // and finally no category at all, which is the shape of an ordinary resource pack.
     candidates.push(joinPath(pack.root, textureRoot, folder, "assets/minecraft/textures", textureFile));
     candidates.push(joinPath(pack.root, textureRoot, "company", "assets/minecraft/textures", textureFile));
     candidates.push(joinPath(pack.root, textureRoot, "_shared", "assets/minecraft/textures", textureFile));
+    candidates.push(joinPath(pack.root, textureRoot, "assets/minecraft/textures", textureFile));
   }
 
   for (const candidate of candidates) {
@@ -290,7 +404,8 @@ export async function loadGameFont(backend: FsBackend, pack: LoadedPack): Promis
 
   const file = provider.file.replace(/^minecraft:/, "");
   for (const textureRoot of pack.profile.paths.textureRoots) {
-    for (const category of ["_shared"]) {
+    // `_shared` for a categorised pack, then the plain shape.
+    for (const category of ["_shared", ""]) {
       try {
         const bytes = await backend.read(
           joinPath(pack.root, textureRoot, category, "assets/minecraft/textures", file),

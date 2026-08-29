@@ -155,6 +155,12 @@ measurement. Everything project-specific (paths, codepoint ranges per module, pa
 deploy targets) lives in a **profile** JSON you keep next to your pack. See
 [`profiles/example.profile.json`](profiles/example.profile.json).
 
+**A pack with no profile at all still opens.** The layout is inferred from the folder —
+fonts at the root, one directory per category, or categories under a container — and the
+guess is shown rather than hidden, with a button to write it down. Verified against the
+NEXT monorepo: the inference reproduces its hand-written profile exactly. An empty folder
+opens too, because that is a pack about to be started.
+
 The profile is discovered, not configured: `slotify.profile.json` at the repository
 root, then `tools/slotify/next.profile.json`, then any `*.profile.json` under
 `tools/slotify` or `profiles` — never a `*.local.json`. Machine-local values (absolute

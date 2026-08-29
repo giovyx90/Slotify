@@ -1,6 +1,6 @@
 {
   "name": "slotify",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Design tool for Minecraft painted-GUI resource packs — pixel-perfect preview, glyph registry, one-click deploy.",
   "license": "GPL-3.0-or-later",
   "repository": "github:giovyx90/Slotify",
