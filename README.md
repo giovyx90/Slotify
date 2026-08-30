@@ -93,7 +93,10 @@ The roadmap, each stage useful on its own:
   them. Almost everything on the canvas is a **drag** now — a four-cell button, a row of
   slots, a run of covered slots, a block of cut ones — each one gesture and one undo. And
   a carved hole **frames itself from the inside**: the border comes out of the space the
-  cut removed, so every slot around it keeps its whole ring.
+  cut removed, so every slot around it keeps its whole ring. Anything ticked can be
+  **flattened** into the library as one cropped PNG, which is how hand-painted work
+  becomes a reusable piece instead of a base64 blob in a JSON file. Infobox text clears
+  the box's border by three pixels rather than sitting on it.
 
 ## Getting it
 

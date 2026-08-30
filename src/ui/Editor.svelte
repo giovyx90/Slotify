@@ -49,6 +49,7 @@
     replaceColour,
     stamp,
   } from "../engine/paintLayer";
+  import { cropToOpaque } from "../engine/ninepatch";
   import { encodePng } from "../engine/png";
   import {
     serializeProject,
@@ -66,7 +67,7 @@
   } from "../engine/overlay";
   import type { PlateStyle } from "../engine/paint";
   import type { Raster } from "../engine/raster";
-  import { bakeSheet, type RenderContext } from "../engine/renderProject";
+  import { bakeSheet, renderSheet, type RenderContext } from "../engine/renderProject";
   import { snapToEdges } from "../engine/snap";
   import { spliceProviders } from "../engine/spliceGuiJson";
   import { measureText, type BitmapFont, type ShadowDir } from "../engine/textFont";
@@ -2155,6 +2156,66 @@
   }
 
   /**
+   * Everything ticked, drawn once and kept as a picture.
+   *
+   * A composite is a group of elements that come back editable, which is the right shape
+   * for a row of buttons and the wrong one for a drawing: hand-painted pixels re-saved as
+   * a composite are a base64 blob inside a JSON file, carried around in full and editable
+   * only with the brush that made them. Flattened, the same work is a PNG the library can
+   * show on its shelf and any screen can place.
+   *
+   * The render is the real one — a scratch project holding only the ticked layers, at an
+   * ascent that puts window coordinates on sheet coordinates — then cropped to whatever
+   * actually has ink in it.
+   */
+  async function flattenSelectionToSprite(): Promise<void> {
+    const ids = checked.size > 0 ? checked : selectedId ? new Set([selectedId]) : new Set<string>();
+    const chosen = elements.filter((element) => ids.has(element.id));
+    if (chosen.length === 0 || !componentName.trim()) {
+      statusLine = t("status.nameTheComponent");
+      return;
+    }
+
+    const scratch: Project = {
+      ...project,
+      elements: chosen.map((element) => ({ ...element })),
+      overlays: [],
+      hotspots: [],
+      background: undefined,
+      bakeWindow: false,
+      ascent: SHEET_TO_WINDOW_Y,
+      stripStrays: false,
+    };
+    const art = cropToOpaque(renderSheet(scratch, undefined, context));
+    if (art.width <= 1 && art.height <= 1) {
+      statusLine = t("status.nothingToFlatten");
+      return;
+    }
+
+    const name = componentName.trim();
+    const component: LibraryComponent = {
+      version: 1,
+      id: slugify(name),
+      name,
+      kind: "sprite",
+      w: art.width,
+      h: art.height,
+    };
+    try {
+      await saveComponent(backend, packRoot, component, encodePng(art));
+    } catch (error) {
+      statusLine = t("status.spriteWriteFailed", { error: String(error) });
+      return;
+    }
+
+    spriteRasters = new Map(spriteRasters).set(component.id, art);
+    componentName = "";
+    checked = new Set();
+    await refreshLibrary();
+    statusLine = t("status.flattened", { name, w: art.width, h: art.height });
+  }
+
+  /**
    * Import a PNG as a library sprite. Every failure here used to be silent — a picker
    * that never opened, a write into a directory that did not exist — so each step now
    * says what went wrong on the status line.
@@ -2589,6 +2650,9 @@
         <div class="row2">
           <input placeholder={t("field.componentName")} bind:value={componentName} />
           <button class="btn sm" onclick={saveSelectionAsComponent}>{t("btn.save")}</button>
+          <button class="btn sm" title={t("tip.flatten")} onclick={flattenSelectionToSprite}>
+            {t("btn.flatten")}
+          </button>
         </div>
         <button class="btn block sm" onclick={importSpritePng}>{t("btn.importPng")}</button>
       </Panel>

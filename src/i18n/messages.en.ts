@@ -378,6 +378,10 @@ export const en = {
 
 
   // ── New screen ───────────────────────────────────────────────────────────────────
+  "btn.flatten": "Flatten ✓",
+  "tip.flatten": "Save what is ticked as one image in the library",
+  "status.flattened": "Flattened {name} into the library ({w}×{h})",
+  "status.nothingToFlatten": "What is ticked has no pixels in it",
   "field.search": "search",
   "hint.noMatch": "Nothing by that name.",
   "hint.pickModule": "Or take one already in the pack:",

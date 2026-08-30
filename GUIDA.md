@@ -119,6 +119,11 @@ partire da zero, **Tag generator** per il testo pixel.
 
 ## 4. L'editor: creare una schermata
 
+**Il testo dell'infobox** parte 9px sotto il bordo alto del riquadro, non 6: a 6 la prima
+riga appoggiava sulla prima riga di nero e si leggeva come testo caduto dentro invece che
+messo. Le righe successive seguono l'interlinea come prima, e `testo dy` sposta tutto il
+blocco se serve altro.
+
 **Il nome viene chiesto subito.** *Nuova schermata* apre un riquadro con quattro campi:
 **modulo**, **schermata**, **codepoint** (già proposto libero dal registro del pack) e
 **righe**. Sotto, mentre scrivi, la finestra dice come si chiamerà il file del progetto
@@ -385,6 +390,19 @@ angoli, i bordi si ripetono, il centro si affianca — mai stirata.
 ---
 
 ## 10. La libreria dei componenti e le immagini
+
+**Due modi di salvare, e servono a cose diverse.** *Salva ✓* fa un **composito**: i layer
+spuntati tornano fuori come elementi normali, ancora modificabili uno per uno — giusto per
+una fila di bottoni, per una barra, per un pezzo che vorrai ritoccare. *Appiattisci ✓* fa
+uno **sprite**: quello che è spuntato viene disegnato una volta sola, ritagliato sul suo
+riquadro opaco e salvato come PNG.
+
+Appiattire è la strada per **la pittura a mano**. Un disegno salvato come composito è un
+blob base64 dentro un file JSON, che si porta dietro tutto il layer grande quanto la
+finestra e si modifica solo col pennello che l'ha fatto; appiattito, lo stesso lavoro è
+un'immagine che la libreria mostra sullo scaffale e che qualsiasi schermata può piazzare.
+Vale per qualunque selezione, non solo per la pittura: spunta un gruppo complicato e
+schiaccialo in un pezzo solo.
 
 I componenti vivono accanto al pack (`tools/slotify/components/`), quindi ogni
 schermata futura riparte dagli stessi pezzi.

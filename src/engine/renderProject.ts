@@ -185,6 +185,15 @@ function drawInfoboxSkin(
   }
 }
 
+/**
+ * How far the first line sits below the infobox's own top.
+ *
+ * Six put it against the first row of black, which reads as text that fell in rather
+ * than text that was placed: the box has a border and the writing should clear it.
+ * Nine is that border plus three, and every line after follows the line height.
+ */
+const INFOBOX_TEXT_TOP = 9;
+
 function drawInfoboxLines(
   sheet: Raster,
   context: RenderContext,
@@ -211,7 +220,7 @@ function drawInfoboxLines(
       colour,
       element.shadow ?? "none",
       textX + (element.textDx ?? 0),
-      y + 6 + index * lineHeight + (element.textDy ?? 0),
+      y + INFOBOX_TEXT_TOP + index * lineHeight + (element.textDy ?? 0),
       scale,
     );
   });

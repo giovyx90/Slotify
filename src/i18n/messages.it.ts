@@ -382,6 +382,10 @@ export const it: Record<MessageKey, string> = {
 
 
   // ── New screen ───────────────────────────────────────────────────────────────────
+  "btn.flatten": "Appiattisci ✓",
+  "tip.flatten": "Salva quello che è spuntato come una sola immagine in libreria",
+  "status.flattened": "{name} appiattito in libreria ({w}×{h})",
+  "status.nothingToFlatten": "Quello che è spuntato non ha pixel dentro",
   "field.search": "cerca",
   "hint.noMatch": "Niente con questo nome.",
   "hint.pickModule": "Oppure prendine uno già nel pack:",
