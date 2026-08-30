@@ -80,6 +80,21 @@ The roadmap, each stage useful on its own:
   the profile is discovered rather than hard-coded — with its declared geometry checked
   against the engine's own constants.
 
+- **v6 — Two languages, a real dialog, and designs** ✅: the whole interface reads in
+  Italian or English, switched in the top bar and remembered per machine, with the copy
+  rewritten short first (rules in [`src/i18n/README.md`](src/i18n/README.md)) rather than
+  the old prose translated twice. A light and a dark theme, a spacing scale, and a tool
+  rail of icons instead of twelve words. Rails are collapsible panels that stay useful
+  shut, so the right-hand column stopped being a scroll of twelve open cards. **Button
+  designs**: a named look — bevel depth plus square, cut or rounded corners, or an
+  imported ninepatch PNG — picked from a gallery whose thumbnails are drawn by the same
+  code that draws the button. The component library became a wall of thumbnails with a
+  search box, because a library of drawings listed by name tells you nothing about any of
+  them. Almost everything on the canvas is a **drag** now — a four-cell button, a row of
+  slots, a run of covered slots, a block of cut ones — each one gesture and one undo. And
+  a carved hole **frames itself from the inside**: the border comes out of the space the
+  cut removed, so every slot around it keeps its whole ring.
+
 ## Getting it
 
 - **Desktop (Windows)** — the installer is attached to each [GitHub
@@ -96,7 +111,9 @@ The roadmap, each stage useful on its own:
 1. `npm run dev`, open `localhost:1420` (or the packaged app once built).
 2. The **viewer** lists every painted sheet in the pack with collisions flagged; pick
    one to see measurements, or **Open in editor** to start from it.
-3. **+ New screen** starts blank. Buttons and infoboxes are **connectable tiles**: tap
+3. **+ New screen** asks what the screen is called — module, screen key, codepoint and
+   rows — and shows the project file and the texture path those two names produce
+   before you commit to them. It starts blank. Buttons and infoboxes are **connectable tiles**: tap
    a grid cell for a 1×1 piece, tap the next cell and it grows into one merged piece —
    the bevel wraps the region outline, and recolouring hue-shifts the highlights and
    shadows instead of leaving them white and black. The **erase** tool removes (and
@@ -132,13 +149,21 @@ something else.
 | `1`…`9`, `0` | Pick a tool, in palette order |
 | `+` / `-`, wheel | Zoom |
 | `g`, `n` | Guides; raw slot numbers |
+| drag / shift+drag with `erase` | Cut a run of regions; cut a rectangle of them |
 
 ## The interface
 
 Slotify wears the [NEXT Roleplay](https://nextroleplay.gg) portal's design language:
-its red, its ink ramp, white cards on a pale canvas, Archivo for prose and IBM Plex Mono
-for every number a machine measured. A painted screen is designed here and documented
-there, so the two should not look like they came from different studios.
+its red, its ink ramp, Archivo for prose and IBM Plex Mono for every number a machine
+measured. A painted screen is designed here and documented there, so the two should not
+look like they came from different studios.
+
+There are two themes. Light is the portal's paper-white; dark exists because this is a
+pixel-art tool used at night and against dark artwork, and a checkerboard that means
+*transparent* has to read as a surface rather than as a light. `auto` follows the
+system. The choice, and the language, live in `localStorage` beside the last pack you
+opened — never in the profile, which belongs to the pack and to everyone who checks it
+out.
 
 The whole skin is one file, [`src/ui/theme.css`](src/ui/theme.css) — tokens and a small
 set of primitives (card, button, segmented control, field, badge, checkerboard stage)

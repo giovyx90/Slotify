@@ -2,7 +2,16 @@
 <script lang="ts">
   import { align, boundingBox, distribute, type AlignMode, type Axis } from "../engine/align";
   import { clippedElements, roomAbove, suggestedRoomAbove } from "../engine/bounds";
-  import { regionKeyAt, regionRect } from "../engine/carve";
+  import { regionKeyAt, regionKeysIn, regionRect } from "../engine/carve";
+  import { designById, type Design } from "../engine/designs";
+  import ComponentGrid from "./ComponentGrid.svelte";
+  import DesignPicker from "./DesignPicker.svelte";
+  import Icon from "./kit/Icon.svelte";
+  import Panel from "./kit/Panel.svelte";
+  import { t, tn, type MessageKey } from "../i18n/i18n.svelte";
+  import type { IconName } from "./kit/icons";
+  import Prefs from "./kit/Prefs.svelte";
+  import { settings } from "./settings.svelte";
   import { renderScreen } from "../engine/chestRenderer";
   import {
     componentFromElements,
@@ -82,14 +91,57 @@
    * selection — the thing you are acting on — blue the pieces staged for a component,
    * ink the guides, which a pale checkerboard would otherwise swallow.
    */
-  const OVERLAY = {
-    grid: "rgba(11,13,16,0.18)",
-    window: "rgba(11,13,16,0.30)",
+  const CHROME = {
+    light: {
+      grid: "rgba(11,13,16,0.18)",
+      window: "rgba(11,13,16,0.30)",
+      coverFill: "rgba(11,13,16,0.25)",
+      coverLine: "rgba(11,13,16,0.60)",
+      badge: "rgba(11,13,16,0.90)",
+      badgeInk: "#FFFFFF",
+    },
+    dark: {
+      grid: "rgba(236,238,242,0.22)",
+      window: "rgba(236,238,242,0.36)",
+      coverFill: "rgba(236,238,242,0.18)",
+      coverLine: "rgba(236,238,242,0.55)",
+      badge: "rgba(236,238,242,0.92)",
+      badgeInk: "#0D0F12",
+    },
+  } as const;
+
+  /**
+   * The system's answer, watched rather than read once: a person who flips their desktop
+   * to dark while Slotify is open must not be left with ink-coloured guides on a black
+   * stage.
+   */
+  let systemDark = $state(
+    typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  $effect(() => {
+    if (typeof matchMedia !== "function") return;
+    const query = matchMedia("(prefers-color-scheme: dark)");
+    const listen = (event: MediaQueryListEvent) => (systemDark = event.matches);
+    query.addEventListener("change", listen);
+    return () => query.removeEventListener("change", listen);
+  });
+  const dark = $derived(
+    settings.theme === "dark" || (settings.theme === "system" && systemDark),
+  );
+
+  /**
+   * The chrome drawn over the artwork. The brand colours carry their own meaning and
+   * stay put in both themes; only the ink-coloured guides swap, because ink on a black
+   * stage is not a guide, it is nothing.
+   */
+  const OVERLAY = $derived({
+    ...(dark ? CHROME.dark : CHROME.light),
     holeFill: "rgba(217,38,50,0.28)",
     holeLine: "rgba(217,38,50,0.85)",
+    holePending: "rgba(217,38,50,0.14)",
     staged: "#2570D4",
     selected: "#FF3B47",
-  } as const;
+  });
   const SHADOW_DIRS: ShadowDir[] = [
     "none", "below-right", "below", "right", "below-left", "left", "above", "above-right", "above-left",
   ];
@@ -103,6 +155,8 @@
     fonts,
     infoboxSkin,
     panelSkin,
+    packDesigns = [],
+    designSkins,
     packPalette,
     suggestCodepoint,
     onExit,
@@ -115,6 +169,10 @@
     fonts: { minecraft?: BitmapFont; mono5?: BitmapFont };
     infoboxSkin?: { raster: Raster; border: number };
     panelSkin?: { raster: Raster; border: number };
+    /** Button designs the pack declares, on top of the built-in set. */
+    packDesigns?: Design[];
+    /** Decoded artwork for the pack's ninepatch designs, by design id. */
+    designSkins?: Map<string, { raster: Raster; border: number }>;
     /** The pack's named colours, from the profile. The project's own come first. */
     packPalette: Swatch[];
     /** A codepoint nothing in the pack claims — the registry knows, this editor does not. */
@@ -140,6 +198,35 @@
     "select", "button", "plate", "infobox", "slot", "erase", "cover", "text", "panel", "well",
     "paint", "hotspot",
   ];
+  /**
+   * What each tool is called and what it does, in one line. The long paragraph that used
+   * to sit under the palette said the same thing about three of the twelve and nothing
+   * about the other nine.
+   */
+  const TOOL_META: Record<Tool, { icon: IconName; blurb: MessageKey }> = {
+    select: { icon: "select", blurb: "tool.select" },
+    button: { icon: "button", blurb: "tool.button" },
+    plate: { icon: "plate", blurb: "tool.plate" },
+    infobox: { icon: "infobox", blurb: "tool.infobox" },
+    slot: { icon: "slot", blurb: "tool.slot" },
+    erase: { icon: "erase", blurb: "tool.erase" },
+    cover: { icon: "cover", blurb: "tool.cover" },
+    text: { icon: "text", blurb: "tool.text" },
+    panel: { icon: "panel", blurb: "tool.panel" },
+    well: { icon: "well", blurb: "tool.well" },
+    paint: { icon: "paint", blurb: "tool.paint" },
+    hotspot: { icon: "hotspot", blurb: "tool.hotspot" },
+  };
+  const PAINT_ICONS: Record<PaintTool, IconName> = {
+    brush: "brush",
+    eraser: "rubber",
+    fill: "fill",
+    line: "line",
+    rect: "rect",
+    ellipse: "ellipse",
+  };
+  /** What the readout under the palette names: the pointer wins over the selection. */
+  let hoveredTool: Tool | null = $state(null);
   let tool: Tool = $state("select");
 
   /*
@@ -188,6 +275,7 @@
   let zoom = $state(2);
   let guides = $state(true);
   let statusLine = $state("");
+  let designPickerOpen = $state(false);
 
   let canvas: HTMLCanvasElement | undefined = $state();
   let nextIdCounter = $state(1);
@@ -209,6 +297,40 @@
       }
     | { kind: "resize"; id: string; handle: Handle; x: number; y: number; w: number; h: number };
   let drag: DragState | null = null;
+
+  /**
+   * An erase stroke. The first region decides the verb for the whole drag: start on
+   * solid panel and everything you cross is cut, start on a hole and everything you
+   * cross is restored. A toggle per region would undo half of its own stroke.
+   *
+   * With shift the drag is a rectangle instead, previewed until the pointer lifts. Either
+   * way the stroke is one history step, the rule painting already follows.
+   */
+  let carve: {
+    verb: "add" | "remove";
+    from: { x: number; y: number };
+    rectangle: boolean;
+    /**
+     * The stroke's own set. `project` is a bindable prop, so a write is not visible to
+     * the very next read: two pointer moves in one frame would each start from the same
+     * stale array and the second would drop the first's cut.
+     */
+    holes: Set<string>;
+  } | null = null;
+  let carvePreview: string[] = $state([]);
+
+  /**
+   * The other three strokes, all built on the erase one's rule: the pointer going down
+   * decides what the whole gesture does, and everything it crosses gets that.
+   *
+   * Tapping a cell at a time is the single thing that made this editor feel like work —
+   * a nine-cell button was nine taps, and a covered row was nine more. Growing is
+   * add-only on purpose: drag back over a cell you already took and it stays taken,
+   * because a gesture that undoes itself halfway is a gesture nobody can aim.
+   */
+  let tileStroke: { tileKind: "button" | "infobox" } | null = null;
+  let coverStroke: { verb: "hide" | "show"; slots: Set<number>; inv: Set<number> } | null = null;
+  let slotStroke = false;
 
   /** Where the pointer is over the artwork, in window pixels — shown in the top bar. */
   let cursor: { x: number; y: number } | null = $state(null);
@@ -234,10 +356,10 @@
    * that pretends otherwise makes you go looking for the other two.
    */
   type FillMode = "connected" | "replace" | "all";
-  const FILL_MODES: { id: FillMode; label: string; hint: string }[] = [
-    { id: "connected", label: "connected", hint: "The patch you tap and whatever touches it, same colour" },
-    { id: "replace", label: "replace", hint: "That colour everywhere in the layer, touching or not" },
-    { id: "all", label: "all", hint: "The whole layer, transparency included" },
+  const FILL_MODES: { id: FillMode; label: MessageKey; hint: MessageKey }[] = [
+    { id: "connected", label: "fillMode.connected", hint: "fillMode.connected.hint" },
+    { id: "replace", label: "fillMode.replace", hint: "fillMode.replace.hint" },
+    { id: "all", label: "fillMode.all", hint: "fillMode.all.hint" },
   ];
   let fillMode: FillMode = $state("connected");
   let paintTool: PaintTool = $state("brush");
@@ -342,6 +464,8 @@
     sprites: spriteRasters,
     infoboxSkin,
     panelSkin,
+    designs: packDesigns,
+    designSkins,
     palette: packPalette,
     paints: paintRasters,
   });
@@ -455,7 +579,7 @@
           case "a":
             event.preventDefault();
             checked = new Set(elements.map((element) => element.id));
-            statusLine = `${checked.size} layer(s) ticked`;
+            statusLine = tn("status.ticked", checked.size);
             return;
           default:
             return;
@@ -562,7 +686,7 @@
     flushHistory();
     applySnapshot(JSON.stringify(recoverable));
     recoverable = null;
-    statusLine = "draft restored - the file on disk is untouched until you save";
+    statusLine = t("status.draftRestored");
   }
 
   function applySnapshot(text: string): void {
@@ -582,21 +706,21 @@
     flushHistory();
     const previous = undo(historyStack);
     if (previous === null) {
-      statusLine = "nothing left to undo";
+      statusLine = t("status.nothingToUndo");
       return;
     }
     applySnapshot(previous);
-    statusLine = `undone - ${historyStack.past.length} step(s) further back`;
+    statusLine = tn("status.undone", historyStack.past.length);
   }
 
   function redoStep(): void {
     const next = redo(historyStack);
     if (next === null) {
-      statusLine = "nothing to redo";
+      statusLine = t("status.nothingToRedo");
       return;
     }
     applySnapshot(next);
-    statusLine = `redone - ${historyStack.future.length} step(s) further forward`;
+    statusLine = tn("status.redone", historyStack.future.length);
   }
 
   async function refreshLibrary(): Promise<void> {
@@ -605,11 +729,11 @@
 
   /** Deletes a component's files from the library — every project loses it, so ask. */
   async function removeComponent(component: LibraryComponent): Promise<void> {
-    if (!window.confirm(`Delete "${component.name}" from the library?`)) return;
+    if (!window.confirm(t("confirm.deleteComponent", { name: component.name }))) return;
     await deleteComponent(backend, packRoot, component);
     if (pendingComponent?.id === component.id) pendingComponent = null;
     await refreshLibrary();
-    statusLine = `component "${component.name}" deleted`;
+    statusLine = t("status.componentDeleted", { name: component.name });
   }
 
   async function ensureSprites(elements: readonly Element[]): Promise<void> {
@@ -624,6 +748,30 @@
     }
     spriteRasters = next;
   }
+
+  /**
+   * The library's own PNGs, loaded because the shelf shows them now.
+   *
+   * `ensureSprites` above only fetches what a project actually places, which was right
+   * while the library was a list of names. A wall of thumbnails needs the art before
+   * anybody picks anything.
+   */
+  async function ensureLibrarySprites(components: readonly LibraryComponent[]): Promise<void> {
+    const wanted = components
+      .filter((component) => component.kind === "sprite" && !spriteRasters.has(component.id))
+      .map((component) => component.id);
+    if (wanted.length === 0) return;
+    const next = new Map(spriteRasters);
+    for (const id of wanted) {
+      const raster = await loadSpriteRaster(backend, packRoot, id);
+      if (raster) next.set(id, raster);
+    }
+    spriteRasters = next;
+  }
+
+  $effect(() => {
+    void ensureLibrarySprites(library);
+  });
 
   $effect(() => {
     void refreshLibrary();
@@ -743,12 +891,17 @@
         fill(region.x, region.y, region.w, region.h, OVERLAY.holeFill);
         stroke(region.x, region.y, region.w, region.h, OVERLAY.holeLine);
       }
+      for (const pending of carvePreview) {
+        const region = regionRect(pending, project.rows);
+        fill(region.x, region.y, region.w, region.h, OVERLAY.holePending);
+        stroke(region.x, region.y, region.w, region.h, OVERLAY.holeLine);
+      }
     }
 
     if (tool === "cover") {
       const tint = (x: number, y: number) => {
-        fill(x, y, 16, 16, "rgba(11,13,16,0.25)");
-        stroke(x, y, 16, 16, "rgba(11,13,16,0.6)");
+        fill(x, y, 16, 16, OVERLAY.coverFill);
+        stroke(x, y, 16, 16, OVERLAY.coverLine);
       };
       for (const slot of project.hiddenSlots ?? []) {
         const rect = slotWindowRect(Math.floor(slot / COLS), slot % COLS);
@@ -775,9 +928,9 @@
           const label = String(slotIndex(row, col));
           const cx = (PAD + rect.x + rect.w / 2) * zoom;
           const cy = (PAD + rect.y + rect.h / 2) * zoom;
-          target.fillStyle = "rgba(255,255,255,0.85)";
+          target.fillStyle = OVERLAY.badgeInk === "#FFFFFF" ? "rgba(255,255,255,0.85)" : "rgba(13,15,18,0.85)";
           target.fillText(label, cx + 1, cy + 1);
-          target.fillStyle = "rgba(11,13,16,0.9)";
+          target.fillStyle = OVERLAY.badge;
           target.fillText(label, cx, cy);
         }
       }
@@ -854,7 +1007,7 @@
     setElements([...elements, element]);
     activePaintId = element.id;
     selectedId = element.id;
-    statusLine = `paint layer ${element.w}x${element.h} added - it sits in the stack like any layer`;
+    statusLine = t("status.paintLayerAdded", { w: element.w, h: element.h });
     return element;
   }
 
@@ -888,7 +1041,7 @@
     paintChanged();
     touch();
     flushHistory();
-    statusLine = "layer cleared";
+    statusLine = t("status.layerCleared");
   }
 
   /** Paints one point (plus its mirrors) with the current nib. */
@@ -980,7 +1133,7 @@
   /** Arms the eyedropper: the next tap on the canvas answers into this field. */
   function armEyedropper(apply: (hex: string) => void): void {
     eyedropper = apply;
-    statusLine = "tap the artwork to pick a colour";
+    statusLine = t("status.pickColour");
   }
 
   /** The colour of one pixel of the drawn screen, or null where it is transparent. */
@@ -1085,7 +1238,7 @@
       if (tileKind === "infobox") {
         const cols = [...cells.map(([, c]) => c), col];
         if (Math.max(...cols) - Math.min(...cols) + 1 > 12) {
-          statusLine = "infobox capped at 12 tiles wide — started a new one";
+          statusLine = t("status.infoboxCapped");
         } else {
           current.cells = [...cells, cell];
           refreshTileBox(current);
@@ -1115,45 +1268,143 @@
     selectedId = element.id;
   }
 
+  /** Cuts or restores regions in the stroke's own set. Returns whether anything moved. */
+  function applyCarve(into: Set<string>, keys: readonly string[], verb: "add" | "remove"): boolean {
+    let changed = false;
+    for (const key of keys) {
+      if (verb === "add" ? into.has(key) : !into.has(key)) continue;
+      if (verb === "add") into.add(key);
+      else into.delete(key);
+      changed = true;
+    }
+    return changed;
+  }
+
+  function writeHoles(holes: Set<string>): void {
+    project = { ...project, holes: [...holes].sort() };
+  }
+
   /**
-   * Tap any region — a slot, the top band, a margin — and it is punched clean out of
-   * the window: a transparent hole the contour redraws around. Tap again to restore.
+   * Tap any region — a slot, the top band, a margin — and it is punched clean out of the
+   * window: a transparent hole the contour redraws around. Tap again to restore.
    */
-  function tapErase(point: { x: number; y: number }): void {
+  function beginCarve(point: { x: number; y: number }, rectangle: boolean): void {
     const key = regionKeyAt(point.x, point.y, project.rows);
     if (!key) return;
     const holes = new Set(project.holes ?? []);
-    if (holes.has(key)) holes.delete(key);
-    else holes.add(key);
-    project = { ...project, holes: [...holes].sort() };
+    const verb = holes.has(key) ? "remove" : "add";
+    carve = { verb, from: point, rectangle, holes };
+    if (rectangle) {
+      carvePreview = [key];
+      return;
+    }
+    if (applyCarve(holes, [key], verb)) writeHoles(holes);
+  }
+
+  /** The pointer moved with the erase tool down. */
+  function carveTo(point: { x: number; y: number }): void {
+    if (!carve) return;
+    if (carve.rectangle) {
+      carvePreview = regionKeysIn(carve.from, point, project.rows);
+      return;
+    }
+    const key = regionKeyAt(point.x, point.y, project.rows);
+    if (key && applyCarve(carve.holes, [key], carve.verb)) writeHoles(carve.holes);
+  }
+
+  /** Pointer up: the rectangle lands, and the whole stroke becomes one undo step. */
+  function endCarve(): void {
+    if (!carve) return;
+    const { verb, holes, rectangle } = carve;
+    if (rectangle && applyCarve(holes, carvePreview, verb)) writeHoles(holes);
+    carve = null;
+    carvePreview = [];
+    flushHistory();
+    statusLine = verb === "add" ? t("status.cut") : t("status.restored");
+  }
+
+  /** Drag across the lattice with button or infobox: add-only, never toggling back. */
+  function growTile(point: { x: number; y: number }, tileKind: "button" | "infobox"): void {
+    const cell = cellAt(point.x, point.y);
+    if (!cell) return;
+    const [row, col] = cell;
+
+    const current =
+      selected && selected.kind === "tiles" && selected.tileKind === tileKind ? selected : null;
+    if (!current) return;
+
+    const cells = (current.cells ?? []) as TileCell[];
+    if (cells.some(([r, c]) => r === row && c === col)) return;
+    if (!cells.some(([r, c]) => Math.abs(r - row) + Math.abs(c - col) === 1)) return;
+
+    if (tileKind === "infobox") {
+      const columns = [...cells.map(([, c]) => c), col];
+      if (Math.max(...columns) - Math.min(...columns) + 1 > 12) {
+        statusLine = t("status.infoboxCapped");
+        return;
+      }
+    }
+
+    current.cells = [...cells, cell];
+    refreshTileBox(current);
+    touch();
+  }
+
+  /** Drag with the slot tool: one well per lattice cell crossed, never two on one cell. */
+  function dropSlot(point: { x: number; y: number }): void {
+    const at = snapSlot(point.x, point.y);
+    if (elements.some((element) => element.kind === "slot" && element.x === at.x && element.y === at.y)) {
+      return;
+    }
+    const element: Element = { id: nextId(), kind: "slot", x: at.x, y: at.y, w: 16, h: 16 };
+    setElements([...elements, element]);
+    selectedId = element.id;
   }
 
   /**
    * The gentler sibling of erase: the slot's well disappears but the panel grey stays —
    * as if no slot were ever drawn there. Container and viewer inventory alike.
    */
-  function tapCover(point: { x: number; y: number }): void {
+  /** Which slot the pointer is over: a container index, an inventory one, or nothing. */
+  function slotUnder(point: { x: number; y: number }): { where: "con" | "inv"; index: number } | null {
     const col = Math.floor((point.x - GRID_X) / CELL);
-    if (col < 0 || col >= COLS) return;
+    if (col < 0 || col >= COLS) return null;
 
     const containerRow = Math.floor((point.y - GRID_Y) / CELL);
     if (containerRow >= 0 && containerRow < project.rows) {
-      const index = slotIndex(containerRow, col);
-      const hidden = new Set(project.hiddenSlots ?? []);
-      if (hidden.has(index)) hidden.delete(index);
-      else hidden.add(index);
-      project = { ...project, hiddenSlots: [...hidden].sort((a, b) => a - b) };
-      return;
+      return { where: "con", index: slotIndex(containerRow, col) };
     }
 
     const invRow = Math.floor((point.y - playerInvY(project.rows)) / CELL);
     const isHotbar = Math.floor((point.y - hotbarY(project.rows)) / CELL) === 0;
     const invIndex = isHotbar ? 27 + col : invRow >= 0 && invRow < 3 ? invRow * COLS + col : null;
-    if (invIndex === null) return;
-    const hidden = new Set(project.hiddenInvSlots ?? []);
-    if (hidden.has(invIndex)) hidden.delete(invIndex);
-    else hidden.add(invIndex);
-    project = { ...project, hiddenInvSlots: [...hidden].sort((a, b) => a - b) };
+    return invIndex === null ? null : { where: "inv", index: invIndex };
+  }
+
+  function beginCover(point: { x: number; y: number }): void {
+    const at = slotUnder(point);
+    if (!at) return;
+    const slots = new Set(project.hiddenSlots ?? []);
+    const inv = new Set(project.hiddenInvSlots ?? []);
+    const already = at.where === "con" ? slots.has(at.index) : inv.has(at.index);
+    coverStroke = { verb: already ? "show" : "hide", slots, inv };
+    coverTo(point);
+  }
+
+  function coverTo(point: { x: number; y: number }): void {
+    if (!coverStroke) return;
+    const at = slotUnder(point);
+    if (!at) return;
+    const { verb, slots, inv } = coverStroke;
+    const set = at.where === "con" ? slots : inv;
+    if (verb === "hide" ? set.has(at.index) : !set.has(at.index)) return;
+    if (verb === "hide") set.add(at.index);
+    else set.delete(at.index);
+    project = {
+      ...project,
+      hiddenSlots: [...slots].sort((a, b) => a - b),
+      hiddenInvSlots: [...inv].sort((a, b) => a - b),
+    };
   }
 
   function onPointerDown(event: PointerEvent): void {
@@ -1163,9 +1414,9 @@
       const hex = pixelAt(point.x, point.y);
       if (hex) {
         eyedropper(hex);
-        statusLine = `picked ${hex}`;
+        statusLine = t("status.picked", { hex });
       } else {
-        statusLine = "nothing but transparency there";
+        statusLine = t("status.nothingThere");
       }
       eyedropper = null;
       return;
@@ -1181,7 +1432,7 @@
       setElements([...elements, ...placed]);
       void ensureSprites(placed);
       selectedId = placed[0]?.id ?? null;
-      statusLine = `placed ${pendingComponent.name}`;
+      statusLine = t("status.placed", { name: pendingComponent.name });
       pendingComponent = null;
       return;
     }
@@ -1194,6 +1445,7 @@
 
     if (tool === "button") {
       tapTile(point, "button");
+      tileStroke = { tileKind: "button" };
       return;
     }
 
@@ -1232,12 +1484,12 @@
     }
 
     if (tool === "erase") {
-      tapErase(point);
+      beginCarve(point, event.shiftKey);
       return;
     }
 
     if (tool === "cover") {
-      tapCover(point);
+      beginCover(point);
       return;
     }
 
@@ -1255,15 +1507,23 @@
       return;
     }
 
+    // The slot tool stays picked and lays one well per cell the pointer crosses: a row
+    // of nine used to be nine taps and nine trips back to the palette.
+    if (tool === "slot") {
+      dropSlot(point);
+      slotStroke = true;
+      return;
+    }
+
     if (tool !== "select") {
+      // Slots are handled above, on their own stroke; these three drop where you tap.
       const defaults: Record<string, Partial<Element> & { w: number; h: number }> = {
-        slot: { w: 16, h: 16 },
         panel: { w: 80, h: 40 },
         well: { w: 18, h: 18 },
         text: { w: 40, h: 8, label: "Text", textColor: "#FFFFFF", shadow: "below-right" },
       };
       const base = defaults[tool]!;
-      const at = tool === "slot" ? snapSlot(point.x, point.y) : { x: point.x - (base.w >> 1), y: point.y - (base.h >> 1) };
+      const at = { x: point.x - (base.w >> 1), y: point.y - (base.h >> 1) };
       const element: Element = { id: nextId(), kind: tool as Element["kind"], x: at.x, y: at.y, ...base } as Element;
       if (element.kind === "text") retextSize(element);
       setElements([...elements, element]);
@@ -1325,6 +1585,22 @@
   function onPointerMove(event: PointerEvent): void {
     const point = windowPoint(event);
     cursor = point;
+    if (carve) {
+      carveTo(point);
+      return;
+    }
+    if (tileStroke) {
+      growTile(point, tileStroke.tileKind);
+      return;
+    }
+    if (coverStroke) {
+      coverTo(point);
+      return;
+    }
+    if (slotStroke) {
+      dropSlot(point);
+      return;
+    }
     if (stroke) {
       paintAt(point, false);
       return;
@@ -1412,6 +1688,13 @@
   }
 
   function onPointerUp(): void {
+    if (tileStroke || coverStroke || slotStroke) {
+      tileStroke = null;
+      coverStroke = null;
+      slotStroke = false;
+      flushHistory();
+    }
+    if (carve) endCarve();
     if (stroke) commitStroke();
     if (creating) {
       const element = elements.find((candidate) => candidate.id === creating);
@@ -1459,7 +1742,7 @@
     setElements(elements.filter((element) => !ids.has(element.id)));
     selectedId = null;
     checked = new Set([...checked].filter((id) => !ids.has(id)));
-    statusLine = `${ids.size} layer(s) deleted`;
+    statusLine = tn("status.deleted", ids.size);
   }
 
   /** A copy two pixels down and right — far enough to grab, near enough to place. */
@@ -1476,7 +1759,7 @@
     void ensureSprites(copies);
     selectedId = copies[0]!.id;
     checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
-    statusLine = `${copies.length} layer(s) duplicated`;
+    statusLine = tn("status.duplicated", copies.length);
   }
 
   /** Adds a colour to the project's own palette and returns the reference to it. */
@@ -1491,7 +1774,7 @@
 
   function removeSwatch(id: string): void {
     project = { ...project, palette: (project.palette ?? []).filter((entry) => entry.id !== id) };
-    statusLine = `@${id} removed - screens naming it fall back to the plain plate`;
+    statusLine = t("status.swatchRemoved", { id });
   }
 
   /** Copies one of the pack's colours into the project so it can be edited here. */
@@ -1507,7 +1790,7 @@
   function samplePalette(): void {
     const source = reference ?? composed;
     if (!source) {
-      statusLine = "nothing to sample from";
+      statusLine = t("status.nothingToSample");
       return;
     }
     const sampled = extractPalette(source, 8);
@@ -1516,7 +1799,7 @@
       .filter((entry) => !existing.some((candidate) => candidate.hex === entry.hex))
       .map((entry) => ({ ...entry, id: freeSwatchId(entry.hex.replace("#", "c"), existing) }));
     project = { ...project, palette: [...existing, ...fresh] };
-    statusLine = `${fresh.length} colour(s) sampled`;
+    statusLine = tn("status.sampled", fresh.length);
   }
 
   const CLIPBOARD_KIND = "slotify/elements@1";
@@ -1534,7 +1817,7 @@
     } catch {
       // the in-window clipboard still holds it
     }
-    statusLine = `${clipboard.length} layer(s) copied`;
+    statusLine = tn("status.copied", clipboard.length);
   }
 
   async function pasteClipboard(): Promise<void> {
@@ -1547,7 +1830,7 @@
       // not our JSON, or no permission — fall back to what this window copied
     }
     if (source.length === 0) {
-      statusLine = "nothing to paste";
+      statusLine = t("status.nothingToPaste");
       return;
     }
     const copies = source.map((element) => ({
@@ -1560,7 +1843,7 @@
     void ensureSprites(copies);
     selectedId = copies[0]!.id;
     checked = copies.length > 1 ? new Set(copies.map((element) => element.id)) : new Set();
-    statusLine = `${copies.length} layer(s) pasted`;
+    statusLine = tn("status.pasted", copies.length);
   }
 
   /**
@@ -1586,7 +1869,7 @@
     if (wanted == null) return;
     project.ascent = SHEET_TO_WINDOW_Y + wanted;
     touch();
-    statusLine = `room above set to ${wanted} (ascent ${project.ascent}) - the artwork is back on the sheet`;
+    statusLine = t("status.roomAboveSet", { room: wanted, ascent: project.ascent });
   }
 
   const windowBounds = $derived({ x: 0, y: 0, w: WINDOW_W, h: windowHeight(project.rows) });
@@ -1600,13 +1883,13 @@
       element.y = placements[index]!.y;
     });
     touch();
-    statusLine = targets.length > 1 ? `${targets.length} layers aligned` : `aligned in the window`;
+    statusLine = tn("status.aligned", targets.length);
   }
 
   function distributeSelection(axis: Axis): void {
     const targets = movableSelection();
     if (targets.length < 3) {
-      statusLine = "tick at least three layers to distribute them";
+      statusLine = t("status.needThree");
       return;
     }
     const placements = distribute(targets, axis);
@@ -1621,7 +1904,7 @@
   function matchSize(dimension: "w" | "h"): void {
     const targets = movableSelection().filter((element) => RESIZABLE.includes(element.kind));
     if (targets.length < 2) {
-      statusLine = "tick two or more resizable layers first";
+      statusLine = t("status.needTwoResizable");
       return;
     }
     const reference = targets.find((element) => element.id === selectedId) ?? targets[0]!;
@@ -1660,7 +1943,7 @@
     delete replacement.cells;
     delete replacement.tileKind;
     setElements(elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)));
-    statusLine = "now a free plate - drag its handles to any size";
+    statusLine = t("status.nowFreePlate");
   }
 
   /** Back onto the lattice: the nearest whole cells the box covers. */
@@ -1679,7 +1962,7 @@
       h: box.h,
     };
     setElements(elements.map((candidate) => (candidate.id === element.id ? replacement : candidate)));
-    statusLine = `snapped onto ${cells.length} cell(s) of the lattice`;
+    statusLine = tn("status.snapped", cells.length);
   }
 
   function setSize(dimension: "w" | "h", value: number): void {
@@ -1724,7 +2007,7 @@
     // see while editing the thing underneath it is a state you will draw twice.
     previewLayers = new Set([...previewLayers, id]);
     selectLayer(id);
-    statusLine = `state "${name}" added - it draws over the base and exports its own sheet`;
+    statusLine = t("status.stateAdded", { name });
   }
 
   /** Copies a state's contents into a new one, for two states that differ in a detail. */
@@ -1748,13 +2031,13 @@
   }
 
   function removeState(overlay: Overlay): void {
-    if (!window.confirm(`Delete the state "${overlay.name}"? Its sheet stays in the pack.`)) return;
+    if (!window.confirm(t("confirm.deleteState", { name: overlay.name }))) return;
     project = {
       ...project,
       overlays: (project.overlays ?? []).filter((candidate) => candidate.id !== overlay.id),
     };
     if (activeLayer === overlay.id) selectLayer(null);
-    statusLine = `state deleted - ${overlay.textureFile} is still on disk`;
+    statusLine = t("status.stateDeleted", { file: overlay.textureFile });
   }
 
   /** Title order: each state backtracks by the advance of the sheet drawn before it. */
@@ -1796,7 +2079,7 @@
     if (end === "front") reordered.push(moved!);
     else reordered.unshift(moved!);
     setElements(reordered);
-    statusLine = end === "front" ? "brought to the front" : "sent to the back";
+    statusLine = end === "front" ? t("status.broughtToFront") : t("status.sentToBack");
   }
 
   /** True when something is drawn after the active paint layer, and so over it. */
@@ -1860,7 +2143,7 @@
     const ids = checked.size > 0 ? checked : selectedId ? new Set([selectedId]) : new Set<string>();
     const chosen = elements.filter((element) => ids.has(element.id));
     if (chosen.length === 0 || !componentName.trim()) {
-      statusLine = "check some layers and give the component a name first";
+      statusLine = t("status.nameTheComponent");
       return;
     }
     const component = componentFromElements(slugify(componentName), componentName.trim(), chosen);
@@ -1868,7 +2151,7 @@
     componentName = "";
     checked = new Set();
     await refreshLibrary();
-    statusLine = `component "${component.name}" saved to the library`;
+    statusLine = t("status.componentSaved", { name: component.name });
   }
 
   /**
@@ -1881,7 +2164,7 @@
     try {
       picked = await pickFile();
     } catch (error) {
-      statusLine = `could not open the file picker: ${error}`;
+      statusLine = t("status.pickerFailed", { error: String(error) });
       return;
     }
     if (!picked) return;
@@ -1890,7 +2173,7 @@
     try {
       raster = decodeTexture(picked.bytes);
     } catch (error) {
-      statusLine = `${picked.name} is not a PNG this tool can read: ${error}`;
+      statusLine = t("status.notAPng", { name: picked.name, error: String(error) });
       return;
     }
 
@@ -1906,12 +2189,12 @@
     try {
       await saveComponent(backend, packRoot, component, picked.bytes);
     } catch (error) {
-      statusLine = `could not write the sprite into the library: ${error}`;
+      statusLine = t("status.spriteWriteFailed", { error: String(error) });
       return;
     }
     spriteRasters = new Map(spriteRasters).set(component.id, raster);
     await refreshLibrary();
-    statusLine = `sprite "${name}" imported (${raster.width}x${raster.height}) — tap the canvas to place it`;
+    statusLine = t("status.spriteImported", { name, w: raster.width, h: raster.height });
     pendingComponent = component;
   }
 
@@ -1921,14 +2204,14 @@
    */
   async function importReference(): Promise<void> {
     const picked = await pickFile().catch((error) => {
-      statusLine = `could not open the file picker: ${error}`;
+      statusLine = t("status.pickerFailed", { error: String(error) });
       return null;
     });
     if (!picked) return;
     try {
       reference = decodeTexture(picked.bytes);
       referenceName = picked.name;
-      statusLine = `reference "${picked.name}" loaded — it guides the eye, it never exports`;
+      statusLine = t("status.referenceLoaded", { name: picked.name });
     } catch (error) {
       statusLine = `${picked.name} is not a PNG this tool can read: ${error}`;
     }
@@ -1950,7 +2233,9 @@
     const orphaned = lastSavedPath != null && lastSavedPath !== path ? lastSavedPath : null;
     lastSavedPath = path;
     discardDraft();
-    statusLine = orphaned ? `saved ${path} - ${orphaned} is now stale` : `saved ${path}`;
+    statusLine = orphaned
+      ? t("status.savedStale", { path, orphaned })
+      : t("status.saved", { path });
   }
 
   /** How many pixels two sheets disagree on, or -1 when they are not the same size. */
@@ -1975,7 +2260,7 @@
     if (!composed) return;
     const path = joinPath(packRoot, "tools/slotify/previews", `${project.module}-${project.screenKey}.png`);
     await backend.write(path, encodePng(composed));
-    statusLine = `preview written to ${path}`;
+    statusLine = t("status.previewWritten", { path });
   }
 
   /**
@@ -2064,7 +2349,7 @@
 
   async function copy(text: string, what: string): Promise<void> {
     await navigator.clipboard.writeText(text);
-    statusLine = `${what} copied to clipboard`;
+    statusLine = t("status.copiedToClipboard", { what });
   }
 
   const screenConfig = $derived([{
@@ -2076,41 +2361,41 @@
 
   async function writeDeployFiles(): Promise<void> {
     if (!deployPath) {
-      statusLine = "set a deploy target path first";
+      statusLine = t("status.setDeployPath");
       return;
     }
     let targetFont = `{"providers": []}`;
     try {
       targetFont = await backend.readText(joinPath(deployPath, "assets/minecraft/font/gui.json"));
     } catch {
-      statusLine = "target has no gui.json yet — starting one";
+      statusLine = t("status.startingGuiJson");
     }
     const plan = buildDeployPlan(project, baked.sheet, baked.provider, targetFont);
     for (const file of plan.files) {
       await backend.write(joinPath(deployPath, file.path), file.bytes);
     }
     rememberDeployTarget();
-    statusLine = `wrote ${plan.files.length} file(s) under ${deployPath}`;
+    statusLine = tn("status.wroteFiles", plan.files.length, { path: deployPath });
   }
 
   async function runReload(): Promise<void> {
     try {
-      statusLine = "rcon: running…";
+      statusLine = t("status.rconRunning");
       rememberDeployTarget();
       const response = await rconExec(
         { host: rconHost, port: rconPort, password: rconPassword },
         "nexo reload pack",
       );
-      statusLine = `rcon: ${response || "(empty response)"}`;
+      statusLine = t("status.rconAnswer", { answer: response || t("status.rconEmpty") });
     } catch (error) {
-      statusLine = `rcon failed: ${error}`;
+      statusLine = t("status.rconFailed", { error: String(error) });
     }
   }
 </script>
 
 <div class="app">
   <header class="topbar">
-    <button class="btn ghost" onclick={onExit}>← Viewer</button>
+    <button class="btn ghost" onclick={onExit}>← {t("chrome.viewer")}</button>
 
     <div class="ident">
       <span class="label-mono">{project.module}</span>
@@ -2121,69 +2406,74 @@
     <div class="spacer"></div>
 
     <div class="chips">
-      <span class="chip">advance <b>{baked.advance}</b></span>
+      <span class="chip">{t("kv.advance").toLowerCase()} <b>{baked.advance}</b></span>
       {#if cursor}<span class="chip">{cursor.x},{cursor.y}</span>{/if}
       {#if baked.straysRemoved > 0}
-        <span class="badge warn">{baked.straysRemoved} strays stripped</span>
+        <span class="badge warn">{t("badge.straysStripped", { n: baked.straysRemoved })}</span>
       {/if}
     </div>
 
     <button
       class="btn ghost"
-      title="Undo (ctrl+Z)"
+      title={t("chrome.undo")}
       disabled={undoDepth === 0}
       onclick={undoStep}
-      aria-label="undo"
-    >&#x21B6;</button>
+      aria-label={t("aria.undo")}
+    ><Icon name="undo" /></button>
     <button
       class="btn ghost"
-      title="Redo (ctrl+shift+Z)"
+      title={t("chrome.redo")}
       disabled={redoDepth === 0}
       onclick={redoStep}
-      aria-label="redo"
-    >&#x21B7;</button>
+      aria-label={t("aria.redo")}
+    ><Icon name="redo" /></button>
 
-    <button class="btn" onclick={saveProject}>Save project</button>
-    <button class="btn primary" onclick={exportToPack}>Export to pack</button>
+    <Prefs />
+
+    <button class="btn compact" title={t("chrome.saveProject")} onclick={saveProject}>
+      <Icon name="save" /><span>{t("chrome.saveProject")}</span>
+    </button>
+    <button class="btn primary compact" title={t("chrome.exportToPack")} onclick={exportToPack}>
+      <Icon name="export" /><span>{t("chrome.exportToPack")}</span>
+    </button>
   </header>
 
   <div class="workspace">
     <aside class="pane left">
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Tools</span>
-        </div>
-        <div class="palette">
+      <Panel id="tools" title={t("panel.tools")}>
+        <div class="rail">
           {#each TOOLS as candidate, index}
             <button
-              class="tool"
+              class="tool square"
               class:active={tool === candidate && !pendingComponent}
-              title={`${candidate} (${index === 9 ? 0 : index + 1})`}
+              title={index < 10 ? `${candidate} (${index === 9 ? 0 : index + 1})` : candidate}
+              aria-label={candidate}
+              aria-pressed={tool === candidate && !pendingComponent}
+              onmouseenter={() => (hoveredTool = candidate)}
+              onmouseleave={() => (hoveredTool = null)}
+              onfocus={() => (hoveredTool = candidate)}
+              onblur={() => (hoveredTool = null)}
               onclick={() => { tool = candidate as Tool; pendingComponent = null; }}
-            >{candidate}</button>
+            >
+              <Icon name={TOOL_META[candidate].icon} />
+              {#if index < 10}<span class="key">{index === 9 ? 0 : index + 1}</span>{/if}
+            </button>
           {/each}
         </div>
-        <p class="hint">
-          Button and infobox grow tile by tile: tap a cell, then the next. Plate is the
-          same button off the lattice - drag out any size.
-        </p>
-      </section>
+        {#if hoveredTool ?? tool}
+          {@const named = hoveredTool ?? tool}
+          <p class="readout">
+            <b>{named}</b><span>{t(TOOL_META[named].blurb)}</span>
+          </p>
+        {/if}
+      </Panel>
 
       {#if tool === "paint" || paintLayers.length > 0}
-        <section class="card">
-          <div class="card-head">
-            <span class="label-mono">Paint</span>
-            <span class="count">{paintLayers.length}</span>
-          </div>
-
+        <Panel id="paint" title={t("panel.paint")} count={paintLayers.length}>
           {#if paintLayers.length === 0}
-            <p class="hint">
-              Tap the canvas with the paint tool and a layer the size of the window
-              appears. It sits in the stack like anything else, so you can paint under a
-              button or over it.
-            </p>
+            <p class="hint">{t("hint.paintEmpty")}</p>
           {:else}
-            <label class="field"><span>layer</span>
+            <label class="field"><span>{t("field.layer")}</span>
               <select
                 value={activePaint?.id ?? ""}
                 onchange={(event) => (activePaintId = (event.target as HTMLSelectElement).value)}
@@ -2195,13 +2485,16 @@
             </label>
           {/if}
 
-          <div class="palette top">
+          <div class="rail top">
             {#each PAINT_TOOLS as candidate}
               <button
-                class="tool"
+                class="tool square"
                 class:active={paintTool === candidate}
+                title={candidate}
+                aria-label={candidate}
+                aria-pressed={paintTool === candidate}
                 onclick={() => { paintTool = candidate; tool = "paint"; }}
-              >{candidate}</button>
+              ><Icon name={PAINT_ICONS[candidate]} /></button>
             {/each}
           </div>
 
@@ -2211,19 +2504,19 @@
                 <button
                   class="tool"
                   class:active={fillMode === mode.id}
-                  title={mode.hint}
+                  title={t(mode.hint)}
                   onclick={() => (fillMode = mode.id)}
-                >{mode.label}</button>
+                >{t(mode.label)}</button>
               {/each}
             </div>
-            <p class="hint">{FILL_MODES.find((mode) => mode.id === fillMode)?.hint}</p>
+            <p class="hint">{t(FILL_MODES.find((mode) => mode.id === fillMode)!.hint)}</p>
           {/if}
 
           <div class="grid2 top">
-            <label class="field"><span>nib</span>
+            <label class="field"><span>{t("field.nib")}</span>
               <input type="number" min="1" max="8" bind:value={brushSize} />
             </label>
-            <label class="field"><span>colour</span>
+            <label class="field"><span>{t("field.colour")}</span>
               <input
                 type="color"
                 value={strokeColour}
@@ -2247,86 +2540,60 @@
             </div>
           {/if}
 
-          <label class="check"><input type="checkbox" bind:checked={mirrorX} /> mirror X</label>
-          <label class="check"><input type="checkbox" bind:checked={mirrorY} /> mirror Y</label>
+          <label class="check"><input type="checkbox" bind:checked={mirrorX} /> {t("check.mirrorX")}</label>
+          <label class="check"><input type="checkbox" bind:checked={mirrorY} /> {t("check.mirrorY")}</label>
           <label class="check">
-            <input type="checkbox" bind:checked={pixelPerfect} /> pixel-perfect (nib 1)
+            <input type="checkbox" bind:checked={pixelPerfect} /> {t("check.pixelPerfect")}
           </label>
-          <label class="check"><input type="checkbox" bind:checked={ditherStroke} /> dither</label>
-          <label class="check"><input type="checkbox" bind:checked={shapeFilled} /> filled shapes</label>
+          <label class="check"><input type="checkbox" bind:checked={ditherStroke} /> {t("check.dither")}</label>
+          <label class="check"><input type="checkbox" bind:checked={shapeFilled} /> {t("check.filledShapes")}</label>
           <label class="check" title="Snap whatever you mix to the nearest colour the pack owns">
             <input type="checkbox" bind:checked={paletteLock} disabled={palette.length === 0} />
-            stay on palette
+            {t("check.stayOnPalette")}
           </label>
 
           <div class="row2">
-            <button class="btn sm" onclick={() => addPaintLayer(false)}>+ window</button>
-            <button class="btn sm" onclick={() => addPaintLayer(true)}>+ sheet</button>
+            <button class="btn sm" onclick={() => addPaintLayer(false)}>{t("btn.addWindowLayer")}</button>
+            <button class="btn sm" onclick={() => addPaintLayer(true)}>{t("btn.addSheetLayer")}</button>
             <button
               class="btn sm"
-              title="Pick a colour off the artwork"
+              title={t("tip.eyedropper")}
               onclick={() => armEyedropper((hex) => (paintColour = hex))}
             >&#x25C9;</button>
           </div>
           {#if activePaint}
-            <button class="btn block sm danger" onclick={clearPaintLayer}>Clear this layer</button>
+            <button class="btn block sm danger" onclick={clearPaintLayer}>{t("btn.clearLayer")}</button>
           {/if}
           {#if paintIsBuried}
-            <p class="hint bad">
-              This layer sits under something drawn later, so strokes over it will not
-              show. Every new element goes on top of the stack.
-            </p>
+            <p class="hint bad">{t("hint.paintBuried")}</p>
             <button class="btn block sm" onclick={() => sendLayerTo(activePaint!.id, "front")}>
-              Bring the paint layer to the front
+              {t("btn.paintToFront")}
             </button>
           {/if}
-          <p class="hint">
-            A full-window paint layer swallows clicks in select mode - lock it in the
-            layer list once you are done with it.
-          </p>
-        </section>
+          <p class="hint">{t("hint.paintLocks")}</p>
+        </Panel>
       {/if}
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Library</span>
-          <span class="count">{library.length}</span>
-        </div>
-        <ul class="list">
-          {#each library as component}
-            <li class="layer-row">
-              <button
-                class="row-btn"
-                class:active={pendingComponent?.id === component.id}
-                onclick={() => { pendingComponent = component; statusLine = `tap the canvas to place ${component.name}`; }}
-              >
-                <span class="truncate">{component.kind === "sprite" ? "🖼" : "🧩"} {component.name}</span>
-                <span class="trail">{component.w}×{component.h}</span>
-              </button>
-              <button
-                class="btn sm danger"
-                aria-label={`delete ${component.name}`}
-                title="Delete from the library"
-                onclick={() => removeComponent(component)}
-              >×</button>
-            </li>
-          {/each}
-          {#if library.length === 0}
-            <li class="hint">Nothing saved yet — tick some layers below, name them, and save.</li>
-          {/if}
-        </ul>
+      <Panel id="library" title={t("panel.library")} count={library.length} startOpen={false}>
+        <ComponentGrid
+          {library}
+          sprites={spriteRasters}
+          {context}
+          pendingId={pendingComponent?.id}
+          onpick={(component) => {
+            pendingComponent = component;
+            statusLine = t("status.placeComponent", { name: component.name });
+          }}
+          onremove={removeComponent}
+        />
         <div class="row2">
-          <input placeholder="component name" bind:value={componentName} />
-          <button class="btn sm" onclick={saveSelectionAsComponent}>Save ✓</button>
+          <input placeholder={t("field.componentName")} bind:value={componentName} />
+          <button class="btn sm" onclick={saveSelectionAsComponent}>{t("btn.save")}</button>
         </div>
-        <button class="btn block sm" onclick={importSpritePng}>Import PNG…</button>
-      </section>
+        <button class="btn block sm" onclick={importSpritePng}>{t("btn.importPng")}</button>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">States</span>
-          <span class="count">{1 + (project.overlays ?? []).length}</span>
-        </div>
+      <Panel id="states" title={t("panel.states")} count={1 + (project.overlays ?? []).length}>
         <ul class="list">
           <li class="layer-row">
             <button
@@ -2334,7 +2601,7 @@
               class:active={activeLayer === null}
               onclick={() => selectLayer(null)}
             >
-              <span class="truncate">Base screen</span>
+              <span class="truncate">{t("editor.baseScreen")}</span>
               <span class="trail">{project.codepoint}</span>
             </button>
           </li>
@@ -2353,32 +2620,32 @@
                 <button
                   class="icon"
                   class:on={shownOverlayIds.has(overlay.id)}
-                  title="Show this state in the preview"
-                  aria-label={`preview ${overlay.name}`}
+                  title={t("tip.previewState")}
+                  aria-label={t("aria.preview", { name: overlay.name })}
                   onclick={() => togglePreviewLayer(overlay.id)}
                 >{shownOverlayIds.has(overlay.id) ? "\u25CF" : "\u25CB"}</button>
                 <button
                   class="icon"
-                  title="Earlier in the title"
-                  aria-label="move state up"
+                  title={t("tip.stateUp")}
+                  aria-label={t("aria.moveStateUp")}
                   onclick={() => moveState(overlay.id, -1)}
                 >&#x25B2;</button>
                 <button
                   class="icon"
-                  title="Later in the title"
-                  aria-label="move state down"
+                  title={t("tip.stateDown")}
+                  aria-label={t("aria.moveStateDown")}
                   onclick={() => moveState(overlay.id, 1)}
                 >&#x25BC;</button>
                 <button
                   class="icon"
-                  title="Duplicate this state"
-                  aria-label={`duplicate ${overlay.name}`}
+                  title={t("tip.duplicateState")}
+                  aria-label={t("aria.duplicate", { name: overlay.name })}
                   onclick={() => duplicateState(overlay)}
                 >&#x29C9;</button>
                 <button
                   class="icon danger"
-                  aria-label={`delete ${overlay.name}`}
-                  title="Delete this state"
+                  aria-label={t("aria.delete", { name: overlay.name })}
+                  title={t("tip.deleteState")}
                   onclick={() => removeState(overlay)}
                 >&times;</button>
               </div>
@@ -2388,34 +2655,24 @@
 
         {#if layer}
           <div class="grid2 top">
-            <label class="field"><span>name</span>
+            <label class="field"><span>{t("field.name")}</span>
               <input value={layer.name} oninput={(event) => { layer!.name = (event.target as HTMLInputElement).value; touch(); }} />
             </label>
-            <label class="field"><span>codepoint</span>
+            <label class="field"><span>{t("field.codepoint")}</span>
               <input value={layer.codepoint} oninput={(event) => { layer!.codepoint = (event.target as HTMLInputElement).value; touch(); }} />
             </label>
           </div>
-          <label class="field top"><span>texture</span>
+          <label class="field top"><span>{t("field.texture")}</span>
             <input value={layer.textureFile} oninput={(event) => { layer!.textureFile = (event.target as HTMLInputElement).value; touch(); }} />
           </label>
-          <p class="hint">
-            Java constant <code>{overlayConstant(layer.id)}</code>. The id never follows
-            the name: it is what the constant and the file are called.
-          </p>
+          <p class="hint">{t("hint.stateConstant", { constant: overlayConstant(layer.id) })}</p>
         {:else}
-          <p class="hint">
-            A state is a second sheet drawn over this one, with its own codepoint. The
-            base is not copied into it - transparent pixels are the base showing through.
-          </p>
+          <p class="hint">{t("hint.stateIsSheet")}</p>
         {/if}
-        <button class="btn block sm" onclick={addState}>+ State</button>
-      </section>
+        <button class="btn block sm" onclick={addState}>{t("btn.addState")}</button>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">{layer ? `Layers in ${layer.name}` : "Layers"}</span>
-          <span class="count">{elements.length}</span>
-        </div>
+      <Panel id="layers" title={layer ? t("panel.layersIn", { name: layer.name }) : t("panel.layers")} count={elements.length}>
         <ul class="list">
           {#each elements as element}
             <li class="layer-row">
@@ -2438,47 +2695,43 @@
               <div class="layer-tools">
                 <button
                   class="icon"
-                  title="Move up: drawn earlier, so further back"
-                  aria-label="move layer up"
+                  title={t("tip.layerUp")}
+                  aria-label={t("aria.moveLayerUp")}
                   onclick={() => moveLayer(element.id, -1)}
                 >&#x25B2;</button>
                 <button
                   class="icon"
-                  title="Move down: drawn later, so further forward"
-                  aria-label="move layer down"
+                  title={t("tip.layerDown")}
+                  aria-label={t("aria.moveLayerDown")}
                   onclick={() => moveLayer(element.id, 1)}
                 >&#x25BC;</button>
                 <button
                   class="icon"
                   class:on={element.hidden}
-                  title="Hidden layers are not drawn and not exported"
-                  aria-label="hide layer"
+                  title={t("tip.hideLayer")}
+                  aria-label={t("aria.hideLayer")}
                   onclick={() => toggleFlag(element, "hidden")}
                 >{element.hidden ? "\u25CB" : "\u25CF"}</button>
                 <button
                   class="icon"
                   class:on={element.locked}
-                  title="Locked layers ignore clicks on the canvas"
-                  aria-label="lock layer"
+                  title={t("tip.lockLayer")}
+                  aria-label={t("aria.lockLayer")}
                   onclick={() => toggleFlag(element, "locked")}
                 >{element.locked ? "\u25A0" : "\u25A1"}</button>
               </div>
             </li>
           {/each}
           {#if elements.length === 0}
-            <li class="hint">Pick button or infobox, then tap the grid — each tap grows the piece.</li>
+            <li class="hint">{t("hint.layersEmpty")}</li>
           {/if}
         </ul>
         {#if elements.length > 0}
-          <p class="hint">A ticked layer joins the next saved component.</p>
+          <p class="hint">{t("hint.componentTicked")}</p>
         {/if}
-      </section>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Hotspots</span>
-          <span class="count">{hotspots.length}</span>
-        </div>
+      <Panel id="hotspots" title={t("panel.hotspots")} count={hotspots.length} startOpen={false}>
         <ul class="list">
           {#each hotspots as hotspot}
             <li class="hotspot-row">
@@ -2499,8 +2752,8 @@
             </li>
           {/each}
         </ul>
-        <button class="btn block sm" onclick={addHotspot}>+ Hotspot group</button>
-      </section>
+        <button class="btn block sm" onclick={addHotspot}>{t("btn.addHotspot")}</button>
+      </Panel>
     </aside>
 
     <section class="stage">
@@ -2514,26 +2767,17 @@
 
     <aside class="pane right">
       {#if recoverable}
-        <section class="card alarm">
-          <div class="card-head"><span class="label-mono">Unsaved draft</span></div>
-          <p class="hint">
-            This screen was left with changes that never reached disk. Restoring touches
-            nothing on disk either - you still have to save.
-          </p>
+        <Panel id="draft" title={t("panel.draft")} tone="alarm" collapsible={false}>
+          <p class="hint">{t("hint.draft")}</p>
           <div class="row2">
-            <button class="btn sm" onclick={restoreDraft}>Restore</button>
-            <button class="btn sm danger" onclick={discardDraft}>Discard</button>
+            <button class="btn sm" onclick={restoreDraft}>{t("btn.restore")}</button>
+            <button class="btn sm danger" onclick={discardDraft}>{t("btn.discard")}</button>
           </div>
-        </section>
+        </Panel>
       {/if}
 
       {#if selected}
-        <section class="card">
-          <div class="card-head">
-            <span class="label-mono">Selected</span>
-            <span class="chip">{selected.kind === "tiles" ? selected.tileKind + " tiles" : selected.kind}</span>
-          </div>
-
+        <Panel id="selected" title={t("panel.selected")} chip={selected.kind === "tiles" ? selected.tileKind + " tiles" : selected.kind}>
           {#if selected.kind !== "tiles"}
             <div class="grid2">
               <label class="field"><span>x</span><input type="number" bind:value={selected.x} onchange={touch} /></label>
@@ -2557,29 +2801,29 @@
             {/if}
             {#if selected.kind === "button"}
               <button class="btn block sm top" onclick={() => toTiles(selected!)}>
-                Snap onto the lattice
+                {t("btn.snapToLattice")}
               </button>
             {/if}
           {:else}
-            <p class="hint">Tap cells with the {selected.tileKind} tool to grow or shrink this piece.</p>
+            <p class="hint">{t("hint.growTiles", { tool: selected.tileKind ?? "" })}</p>
             {#if selected.tileKind === "button"}
               <button class="btn block sm" onclick={() => toFreePlate(selected!)}>
-                Free from the lattice
+                {t("btn.freeFromLattice")}
               </button>
             {/if}
           {/if}
 
           {#if selected.kind === "button" || selected.kind === "text" || selected.kind === "panel" || (selected.kind === "tiles" && selected.tileKind === "button")}
             <label class="field top">
-              <span>label</span>
+              <span>{t("field.label")}</span>
               <input value={selected.label ?? ""} oninput={(event) => { selected!.label = (event.target as HTMLInputElement).value; retextSize(selected!); touch(); }} />
             </label>
           {/if}
 
           {#if selected.kind === "infobox" || (selected.kind === "tiles" && selected.tileKind === "infobox")}
             <div class="card-head top">
-              <span class="label-mono">Lines</span>
-              <span class="hint">one colour each</span>
+              <span class="label-mono">{t("panel.lines")}</span>
+              <span class="hint">{t("hint.oneColourEach")}</span>
             </div>
             {#each selected.lines ?? [] as line, index}
               <div class="line-row">
@@ -2596,7 +2840,7 @@
                 {#if palette.length > 0}
                   <select
                     class="line-swatch"
-                    title="Use a palette colour for this line"
+                    title={t("tip.lineSwatch")}
                     value={(selected.lineColors?.[index] ?? "").startsWith("@") ? selected.lineColors![index] : ""}
                     onchange={(event) => setLineColor(index, (event.target as HTMLSelectElement).value)}
                   >
@@ -2606,69 +2850,79 @@
                     {/each}
                   </select>
                 {/if}
-                <button class="btn sm danger" onclick={() => removeLine(index)} aria-label="remove line">×</button>
+                <button class="btn sm danger" onclick={() => removeLine(index)} aria-label={t("aria.removeLine")}>×</button>
               </div>
             {/each}
             <div class="row2">
-              <button class="btn sm" onclick={addLine}>+ line</button>
-              <label class="field"><span>gap</span>
+              <button class="btn sm" onclick={addLine}>{t("btn.addLine")}</button>
+              <label class="field"><span>{t("field.gap")}</span>
                 <select value={selected.lineGap ?? 2} onchange={(event) => { selected!.lineGap = Number((event.target as HTMLSelectElement).value) as 2 | 3 | 4; touch(); }}>
                   <option value={2}>2px</option>
                   <option value={3}>3px</option>
                   <option value={4}>4px</option>
                 </select>
               </label>
-              <label class="field"><span>size</span>
+              <label class="field"><span>{t("field.size")}</span>
                 <select value={selected.textScale ?? 2} onchange={(event) => { selected!.textScale = Number((event.target as HTMLSelectElement).value) as 1 | 2; touch(); }}>
-                  <option value={1}>1×</option>
-                  <option value={2}>2× (standard)</option>
+                  <option value={1}>{t("option.scale1")}</option>
+                  <option value={2}>{t("option.scale2")}</option>
                 </select>
               </label>
             </div>
           {/if}
 
           {#if selected.kind === "button" || (selected.kind === "tiles" && selected.tileKind === "button")}
-            <label class="field top"><span>edge</span>
+            <div class="field top design-row">
+              <span>{t("field.design")}</span>
+              <button class="design-pick" onclick={() => (designPickerOpen = true)}>
+                {designById(selected.design, packDesigns)?.name ?? t("design.none")}
+              </button>
+            </div>
+            {#if designById(selected.design, packDesigns)}
+              <p class="hint">{t("hint.designEdge")}</p>
+            {:else}
+            <label class="field top"><span>{t("field.edge")}</span>
               <select
                 value={selected.bevel ?? "single"}
                 onchange={(event) => { selected!.bevel = (event.target as HTMLSelectElement).value as PlateStyle; touch(); }}
               >
-                <option value="single">single - 1px bevel</option>
-                <option value="double">double - 2px, for big plates</option>
-                <option value="flat">flat - outline only</option>
+                <option value="single">{t("option.edgeSingle")}</option>
+                <option value="double">{t("option.edgeDouble")}</option>
+                <option value="flat">{t("option.edgeFlat")}</option>
               </select>
             </label>
+            {/if}
           {/if}
 
           {#if hasText}
             <div class="grid2 top">
-              <label class="field"><span>align</span>
+              <label class="field"><span>{t("field.align")}</span>
                 <select
                   value={selected.align ?? "center"}
                   onchange={(event) => { selected!.align = (event.target as HTMLSelectElement).value as "left" | "center" | "right"; touch(); }}
                 >
-                  <option value="left">left</option>
-                  <option value="center">centre</option>
-                  <option value="right">right</option>
+                  <option value="left">{t("option.left")}</option>
+                  <option value="center">{t("option.centre")}</option>
+                  <option value="right">{t("option.right")}</option>
                 </select>
               </label>
               <label class="field" title="Nudge the text off that position">
-                <span>text dx</span>
+                <span>{t("field.textDx")}</span>
                 <input type="number" value={selected.textDx ?? 0} onchange={(event) => { selected!.textDx = Number((event.target as HTMLInputElement).value); touch(); }} />
               </label>
               <label class="field">
-                <span>text dy</span>
+                <span>{t("field.textDy")}</span>
                 <input type="number" value={selected.textDy ?? 0} onchange={(event) => { selected!.textDy = Number((event.target as HTMLInputElement).value); touch(); }} />
               </label>
             </div>
             <div class="grid2 top">
-              <label class="field"><span>font</span>
+              <label class="field"><span>{t("kv.font")}</span>
                 <select value={selected.font ?? "minecraft"} onchange={(event) => { selected!.font = (event.target as HTMLSelectElement).value as "minecraft" | "mono5"; retextSize(selected!); touch(); }}>
-                  <option value="minecraft">minecraft</option>
-                  <option value="mono5">mono 5×5</option>
+                  <option value="minecraft">{t("option.minecraft")}</option>
+                  <option value="mono5">{t("option.mono5")}</option>
                 </select>
               </label>
-              <label class="field"><span>shadow</span>
+              <label class="field"><span>{t("field.shadow")}</span>
                 <select value={selected.shadow ?? "none"} onchange={(event) => { selected!.shadow = (event.target as HTMLSelectElement).value as ShadowDir; touch(); }}>
                   {#each SHADOW_DIRS as dir}<option value={dir}>{dir}</option>{/each}
                 </select>
@@ -2679,7 +2933,7 @@
           <div class="colours top">
             {#if !["text", "sprite", "slot"].includes(selected.kind) && !(selected.kind === "tiles" && selected.tileKind === "infobox") && selected.kind !== "infobox"}
               <ColorField
-                label="fill"
+                label={t("field.fill")}
                 value={selected.color}
                 fallback="#C6C6C6"
                 {palette}
@@ -2687,7 +2941,7 @@
                 oneyedrop={() => armEyedropper((hex) => { selected!.color = hex; touch(); })}
               />
               <div class="bevels" title="What the fill turns into: highlight, shadow, edge">
-                <span class="label-mono">bevels</span>
+                <span class="label-mono">{t("panel.bevels")}</span>
                 <span class="bevel" style:background={rgbaCss(bevelPreview.light)}></span>
                 <span class="bevel" style:background={rgbaCss(bevelPreview.dark)}></span>
                 <span class="bevel" style:background={rgbaCss(bevelPreview.edge)}></span>
@@ -2695,7 +2949,7 @@
             {/if}
             {#if hasText}
               <ColorField
-                label="text"
+                label={t("field.text")}
                 value={selected.textColor}
                 fallback="#FFFFFF"
                 {palette}
@@ -2704,50 +2958,45 @@
               />
               {#if selected.color && textContrast < 3}
                 <p class="hint bad">
-                  Contrast {textContrast.toFixed(1)}:1 against the fill - at this size the
-                  label will not read.
+                  {t("hint.contrast", { ratio: textContrast.toFixed(1) })}
                 </p>
               {/if}
             {/if}
           </div>
 
           {#if selected.kind === "button" || (selected.kind === "tiles" && selected.tileKind === "button")}
-            <label class="check"><input type="checkbox" bind:checked={selected.pressed} onchange={touch} /> pressed</label>
+            <label class="check"><input type="checkbox" bind:checked={selected.pressed} onchange={touch} /> {t("check.pressed")}</label>
           {/if}
 
           <div class="nudge">
             {#if selected.kind !== "tiles"}
               <div class="pad">
-                <button class="btn sm" onclick={() => nudge(0, -1)} aria-label="up">▲</button>
+                <button class="btn sm" onclick={() => nudge(0, -1)} aria-label={t("tip.up")}>▲</button>
                 <div class="pad-row">
-                  <button class="btn sm" onclick={() => nudge(-1, 0)} aria-label="left">◀</button>
-                  <button class="btn sm" onclick={() => nudge(1, 0)} aria-label="right">▶</button>
+                  <button class="btn sm" onclick={() => nudge(-1, 0)} aria-label={t("tip.left")}>◀</button>
+                  <button class="btn sm" onclick={() => nudge(1, 0)} aria-label={t("tip.right")}>▶</button>
                 </div>
-                <button class="btn sm" onclick={() => nudge(0, 1)} aria-label="down">▼</button>
+                <button class="btn sm" onclick={() => nudge(0, 1)} aria-label={t("tip.down")}>▼</button>
               </div>
             {/if}
             <div class="row2">
-              <button class="btn sm" onclick={() => sendLayerTo(selected!.id, "front")}>To front</button>
-              <button class="btn sm" onclick={() => sendLayerTo(selected!.id, "back")}>To back</button>
+              <button class="btn sm" onclick={() => sendLayerTo(selected!.id, "front")}>{t("btn.toFront")}</button>
+              <button class="btn sm" onclick={() => sendLayerTo(selected!.id, "back")}>{t("btn.toBack")}</button>
             </div>
-            <button class="btn sm danger" onclick={removeSelected}>Delete</button>
+            <button class="btn sm danger" onclick={removeSelected}>{t("btn.delete")}</button>
           </div>
-        </section>
+        </Panel>
       {:else}
         <div class="empty">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="M4 4h7v7H4zM13 13h7v7h-7z" />
             <path d="M13 4h7v7h-7z" opacity="0.4" />
           </svg>
-          <p>Nothing selected. Pick a tool and tap the grid, or tap a layer.</p>
+          <p>{t("hint.nothingSelected")}</p>
         </div>
       {/if}
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Palette</span>
-          <span class="count">{palette.length}</span>
-        </div>
+      <Panel id="palette" title={t("panel.palette")} count={palette.length} startOpen={false}>
         {#if (project.palette ?? []).length > 0}
           <ul class="list">
             {#each project.palette ?? [] as entry, index}
@@ -2771,21 +3020,18 @@
                   }}
                 />
                 <code class="swatch-id">@{entry.id}</code>
-                <button class="btn sm danger" aria-label={`remove ${entry.name}`} onclick={() => removeSwatch(entry.id)}
+                <button class="btn sm danger" aria-label={t("aria.remove", { name: entry.name })} onclick={() => removeSwatch(entry.id)}
                   >&times;</button
                 >
               </li>
             {/each}
           </ul>
         {:else}
-          <p class="hint">
-            No colour named here yet. A named colour is stored as <code>@id</code>, so
-            moving the swatch moves every screen that used it.
-          </p>
+          <p class="hint">{t("hint.paletteEmpty")}</p>
         {/if}
 
         {#if packPalette.length > 0}
-          <p class="hint top">From the pack - tap to make it editable here:</p>
+          <p class="hint top">{t("hint.fromPack")}</p>
           <div class="swatches">
             {#each packPalette as entry}
               <button
@@ -2800,63 +3046,57 @@
         {/if}
 
         <div class="row2">
-          <button class="btn sm" onclick={() => addSwatch(fillHex)}>+ current fill</button>
-          <button class="btn sm" onclick={samplePalette}>Sample art</button>
+          <button class="btn sm" onclick={() => addSwatch(fillHex)}>{t("btn.addCurrentFill")}</button>
+          <button class="btn sm" onclick={samplePalette}>{t("btn.sampleArt")}</button>
         </div>
-      </section>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Arrange</span>
-          <span class="count">{checked.size > 1 ? checked.size : selected ? 1 : 0}</span>
-        </div>
+      <Panel id="arrange" title={t("panel.arrange")} count={checked.size > 1 ? checked.size : selected ? 1 : 0} startOpen={false}>
         <p class="hint">
           {#if checked.size > 1}
-            Aligns the {checked.size} ticked layers to each other.
+            {t("hint.alignTicked", { n: checked.size })}
           {:else}
-            Aligns the selected layer inside the window. Tick two or more to align them
-            to each other instead.
+            {t("hint.alignOne")}
           {/if}
         </p>
         <div class="btn-grid">
-          <button class="btn sm" title="Align left" onclick={() => alignSelection("left")}>&#x2523;</button>
-          <button class="btn sm" title="Centre horizontally" onclick={() => alignSelection("hcenter")}>&#x2503;</button>
-          <button class="btn sm" title="Align right" onclick={() => alignSelection("right")}>&#x252B;</button>
-          <button class="btn sm" title="Align top" onclick={() => alignSelection("top")}>&#x2533;</button>
-          <button class="btn sm" title="Centre vertically" onclick={() => alignSelection("vcenter")}>&#x2501;</button>
-          <button class="btn sm" title="Align bottom" onclick={() => alignSelection("bottom")}>&#x253B;</button>
+          <button class="btn sm" title={t("tip.alignLeft")} onclick={() => alignSelection("left")}>&#x2523;</button>
+          <button class="btn sm" title={t("tip.alignHCentre")} onclick={() => alignSelection("hcenter")}>&#x2503;</button>
+          <button class="btn sm" title={t("tip.alignRight")} onclick={() => alignSelection("right")}>&#x252B;</button>
+          <button class="btn sm" title={t("tip.alignTop")} onclick={() => alignSelection("top")}>&#x2533;</button>
+          <button class="btn sm" title={t("tip.alignVCentre")} onclick={() => alignSelection("vcenter")}>&#x2501;</button>
+          <button class="btn sm" title={t("tip.alignBottom")} onclick={() => alignSelection("bottom")}>&#x253B;</button>
         </div>
         <div class="row2">
-          <button class="btn sm" onclick={() => distributeSelection("h")}>Space across</button>
-          <button class="btn sm" onclick={() => distributeSelection("v")}>Space down</button>
+          <button class="btn sm" onclick={() => distributeSelection("h")}>{t("btn.spaceAcross")}</button>
+          <button class="btn sm" onclick={() => distributeSelection("v")}>{t("btn.spaceDown")}</button>
         </div>
         <div class="row2">
-          <button class="btn sm" onclick={() => matchSize("w")}>Same width</button>
-          <button class="btn sm" onclick={() => matchSize("h")}>Same height</button>
+          <button class="btn sm" onclick={() => matchSize("w")}>{t("btn.sameWidth")}</button>
+          <button class="btn sm" onclick={() => matchSize("h")}>{t("btn.sameHeight")}</button>
         </div>
         <div class="row2">
-          <button class="btn sm" onclick={duplicateSelection}>Duplicate</button>
-          <button class="btn sm" onclick={copySelection}>Copy</button>
-          <button class="btn sm" onclick={pasteClipboard}>Paste</button>
+          <button class="btn sm" onclick={duplicateSelection}>{t("btn.duplicate")}</button>
+          <button class="btn sm" onclick={copySelection}>{t("btn.copy")}</button>
+          <button class="btn sm" onclick={pasteClipboard}>{t("btn.paste")}</button>
         </div>
-      </section>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head"><span class="label-mono">Screen</span></div>
+      <Panel id="screen" title={t("panel.screen")}>
         <div class="grid2">
-          <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={project.rows} /></label>
-          <label class="field"><span>shift</span><input type="number" bind:value={project.shift} /></label>
+          <label class="field"><span>{t("field.rows")}</span><input type="number" min="1" max="6" bind:value={project.rows} /></label>
+          <label class="field"><span>{t("field.shift")}</span><input type="number" bind:value={project.shift} /></label>
           <label
             class="field"
-            title="The raw number gui.json declares. room above is this minus 13; they are one knob."
+            title={t("tip.ascent")}
           >
-            <span>ascent</span><input type="number" bind:value={project.ascent} />
+            <span>{t("field.ascent")}</span><input type="number" bind:value={project.ascent} />
           </label>
           <label
             class="field"
-            title="Pixels of sheet that land above the chest window. The same number as the ascent, minus 13 — it buys room for a title panel; it never moves the window, which the client puts where it puts it."
+            title={t("tip.roomAbove")}
           >
-            <span>room above</span>
+            <span>{t("field.roomAbove")}</span>
             <input
               type="number"
               min="-13"
@@ -2865,50 +3105,44 @@
               oninput={(event) => { project.ascent = SHEET_TO_WINDOW_Y + Number((event.target as HTMLInputElement).value); touch(); }}
             />
           </label>
-          <label class="field"><span>zoom</span><input type="number" min="1" max="8" bind:value={zoom} /></label>
+          <label class="field"><span>{t("field.zoom")}</span><input type="number" min="1" max="8" bind:value={zoom} /></label>
         </div>
-        <label class="field top"><span>codepoint</span><input bind:value={project.codepoint} /></label>
-        <label class="field top"><span>fallback title</span><input bind:value={project.fallbackTitle} /></label>
-        <label class="check"><input type="checkbox" bind:checked={guides} /> guides</label>
+        <label class="field top"><span>{t("field.codepoint")}</span><input bind:value={project.codepoint} /></label>
+        <label class="field top"><span>{t("field.fallbackTitle")}</span><input bind:value={project.fallbackTitle} /></label>
+        <label class="check"><input type="checkbox" bind:checked={guides} /> {t("check.guides")}</label>
         <label class="check">
-          <input type="checkbox" bind:checked={showSlotNumbers} /> raw slot numbers
+          <input type="checkbox" bind:checked={showSlotNumbers} /> {t("check.rawSlotNumbers")}
         </label>
         <label
           class="check"
-          title="Off, nothing is removed and the advance is yours to watch"
+          title={t("tip.stripStrays")}
         >
           <input
             type="checkbox"
             checked={project.stripStrays !== false}
             onchange={(event) => { project.stripStrays = (event.target as HTMLInputElement).checked; touch(); }}
-          /> strip stray pixels
+          /> {t("check.stripStrays")}
         </label>
         {#if paintLayers.length > 0 && project.stripStrays !== false}
           <p class="hint">
-            This screen is painted by hand and stray-stripping is on: the tip of a line
-            and a lone dot both have one neighbour, and both are being removed. The
-            counter above says how many.
+            {t("hint.strayWarning")}
           </p>
         {/if}
-        <label class="check"><input type="checkbox" bind:checked={project.bakeWindow} /> bake window into the sheet</label>
+        <label class="check"><input type="checkbox" bind:checked={project.bakeWindow} /> {t("check.bakeWindow")}</label>
         <p class="hint">
-          Erase tool: tap any part of the window — a slot, the top band, a margin — and it
-          becomes a transparent hole; the contour redraws around it. Cover tool: the slot's
-          well goes away but the panel grey stays, as if no slot were drawn. Tap again to
-          restore. Holes: <b>{project.holes?.length ?? 0}</b> · covered:
-          <b>{(project.hiddenSlots?.length ?? 0) + (project.hiddenInvSlots?.length ?? 0)}</b>.
+          {t("hint.erase")}
+          {t("hint.holesCovered", {
+            holes: project.holes?.length ?? 0,
+            covered: (project.hiddenSlots?.length ?? 0) + (project.hiddenInvSlots?.length ?? 0),
+          })}
         </p>
-      </section>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Reference</span>
-          {#if reference}<span class="chip">{reference.width}x{reference.height}</span>{/if}
-        </div>
+      <Panel id="reference" title={t("panel.reference")} chip={reference ? reference.width + "x" + reference.height : undefined} startOpen={false}>
         {#if reference}
           <p class="hint truncate-line">{referenceName}</p>
           <div class="grid2">
-            <label class="field"><span>opacity</span>
+            <label class="field"><span>{t("field.opacity")}</span>
               <input type="range" min="0" max="100" bind:value={referenceOpacity} />
             </label>
             <label class="field"><span>%</span>
@@ -2918,109 +3152,109 @@
             <label class="field"><span>y</span><input type="number" bind:value={referenceY} /></label>
           </div>
           <div class="row2">
-            <button class="btn sm" onclick={importReference}>Replace…</button>
-            <button class="btn sm danger" onclick={() => { reference = null; referenceName = ""; }}>Remove</button>
+            <button class="btn sm" onclick={importReference}>{t("btn.replace")}</button>
+            <button class="btn sm danger" onclick={() => { reference = null; referenceName = ""; }}>{t("btn.remove")}</button>
           </div>
         {:else}
-          <button class="btn block sm" onclick={importReference}>Import PNG as onion skin…</button>
-          <p class="hint">Drawn over the artwork to trace or compare. Never exported.</p>
+          <button class="btn block sm" onclick={importReference}>{t("btn.importOnionSkin")}</button>
+          <p class="hint">{t("hint.onionSkin")}</p>
         {/if}
-      </section>
+      </Panel>
 
       {#if clipped.length > 0}
-        <section class="card alarm">
-          <div class="card-head">
-            <span class="label-mono">Falling off the sheet</span>
-            <span class="count">{clipped.length}</span>
-          </div>
+        <Panel id="clipped" title={t("panel.clipped")} count={clipped.length} tone="alarm" collapsible={false}>
           <p class="hint">
-            These land outside the 256x256 canvas, and the renderer drops those pixels
-            without a word. The window never moves - raise <b>room above</b> to give the
-            artwork sheet rows above it, or bring it back down.
+            {t("hint.clipped")}
           </p>
           <ul class="list">
             {#each clipped as entry}
               <li class="hint">
                 <b>{entry.kind}</b> {entry.id} ({entry.layer}) -
                 {[
-                  entry.top ? `${entry.top}px off the top` : "",
-                  entry.bottom ? `${entry.bottom}px off the bottom` : "",
-                  entry.left ? `${entry.left}px off the left` : "",
-                  entry.right ? `${entry.right}px off the right` : "",
+                  entry.top ? t("hint.clippedEntry", { px: entry.top, side: t("side.top") }) : "",
+                  entry.bottom ? t("hint.clippedEntry", { px: entry.bottom, side: t("side.bottom") }) : "",
+                  entry.left ? t("hint.clippedEntry", { px: entry.left, side: t("side.left") }) : "",
+                  entry.right ? t("hint.clippedEntry", { px: entry.right, side: t("side.right") }) : "",
                 ].filter(Boolean).join(", ")}
               </li>
             {/each}
           </ul>
           {#if roomFix != null}
             <button class="btn block sm" onclick={applyRoomFix}>
-              Set room above to {roomFix}
+              {t("btn.setRoomAbove", { n: roomFix })}
             </button>
           {:else}
             <p class="hint">
-              No single value fits: something hangs off the top and something off the
-              bottom at once. That needs a shorter screen, not a different ascent.
+              {t("hint.clippedNoFix")}
             </p>
           {/if}
-        </section>
+        </Panel>
       {/if}
 
-      <section class="card">
-        <div class="card-head"><span class="label-mono">Measured</span></div>
+      <Panel id="measured" title={t("panel.measured")}>
         <dl class="kv">
-          <div><dt>Advance</dt><dd>{baked.advance}</dd></div>
+          <div><dt>{t("kv.advance")}</dt><dd>{baked.advance}</dd></div>
           <div>
-            <dt>Strays</dt>
+            <dt>{t("kv.strays")}</dt>
             <dd>
               {#if baked.straysRemoved > 0}
-                <span class="badge warn">{baked.straysRemoved} stripped</span>
+                <span class="badge warn">{t("badge.stripped", { n: baked.straysRemoved })}</span>
               {:else}
-                <span class="badge ok">none</span>
+                <span class="badge ok">{t("badge.none")}</span>
               {/if}
             </dd>
           </div>
         </dl>
         {#if !fonts.minecraft}
-          <p class="hint bad">Pack font not loaded — the minecraft face falls back to mono.</p>
+          <p class="hint bad">{t("hint.noPackFont")}</p>
         {/if}
         {#if !infoboxSkin}
-          <p class="hint bad">No infobox skin in the profile — using the procedural stand-in.</p>
+          <p class="hint bad">{t("hint.noInfoboxSkin")}</p>
         {/if}
-      </section>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head"><span class="label-mono">Copy out</span></div>
+      <Panel id="copyout" title={t("panel.copyOut")} startOpen={false}>
         <div class="stack">
-          <button class="btn block" onclick={savePreviewPng}>Save preview PNG</button>
-          <button class="btn block" onclick={() => copy(visualsYmlBlock(screenConfig), "visuals yml")}>Visuals yml</button>
-          <button class="btn block" onclick={() => copy(configYmlBlock(`${project.module}.gui`, screenConfig), "config yml")}>Config yml</button>
+          <button class="btn block" onclick={savePreviewPng}>{t("btn.savePreviewPng")}</button>
+          <button class="btn block" onclick={() => copy(visualsYmlBlock(screenConfig), "visuals yml")}>{t("btn.visualsYml")}</button>
+          <button class="btn block" onclick={() => copy(configYmlBlock(`${project.module}.gui`, screenConfig), "config yml")}>{t("btn.configYml")}</button>
           <button class="btn block" onclick={() => {
             const files = scaffoldFiles(scaffoldInput());
             const text = Object.entries(files).map(([path, body]) => `// ==== ${path}\n${body}`).join("\n");
             copy(text + "\n" + advanceTable(scaffoldInput()), "Java scaffold");
-          }}>Java scaffold</button>
+          }}>{t("btn.javaScaffold")}</button>
         </div>
-      </section>
+      </Panel>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="label-mono">Push</span>
-          <span class="badge info nodot">dev</span>
-        </div>
-        <label class="field"><span>pack path</span><input bind:value={deployPath} placeholder="…/.slotify-staging/pack" /></label>
+      <Panel id="push" title={t("panel.push")} chip={t("badge.dev")} startOpen={false}>
+        <label class="field"><span>{t("field.packPath")}</span><input bind:value={deployPath} placeholder="…/.slotify-staging/pack" /></label>
         <div class="grid2 top">
-          <label class="field"><span>host</span><input bind:value={rconHost} /></label>
-          <label class="field"><span>port</span><input type="number" bind:value={rconPort} /></label>
+          <label class="field"><span>{t("field.host")}</span><input bind:value={rconHost} /></label>
+          <label class="field"><span>{t("field.port")}</span><input type="number" bind:value={rconPort} /></label>
         </div>
-        <label class="field top"><span>password</span><input type="password" bind:value={rconPassword} /></label>
+        <label class="field top"><span>{t("field.password")}</span><input type="password" bind:value={rconPassword} /></label>
         <div class="stack top">
-          <button class="btn block" onclick={writeDeployFiles}>Write files</button>
-          <button class="btn block" onclick={runReload} disabled={!rconHost || !rconPassword}>nexo reload pack</button>
+          <button class="btn block" onclick={writeDeployFiles}>{t("btn.writeFiles")}</button>
+          <button class="btn block" onclick={runReload} disabled={!rconHost || !rconPassword}>{t("btn.reloadPack")}</button>
         </div>
-      </section>
+      </Panel>
 
       {#if statusLine}
         <p class="status">{statusLine}</p>
       {/if}
+
+      <DesignPicker
+        bind:open={designPickerOpen}
+        current={selected?.design}
+        pressed={selected?.pressed ?? false}
+        {packDesigns}
+        {designSkins}
+        onpick={(id) => {
+          if (!selected) return;
+          selected.design = id;
+          touch();
+        }}
+      />
     </aside>
   </div>
 </div>
@@ -3130,6 +3364,92 @@
     gap: 0.25rem;
   }
 
+  .rail {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+    gap: var(--s1);
+  }
+  .tool.square {
+    position: relative;
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1;
+    padding: 0;
+  }
+  .tool.square .key {
+    position: absolute;
+    right: 3px;
+    bottom: 1px;
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    line-height: 1;
+    color: var(--ink-faint);
+  }
+  .tool.square.active .key {
+    color: rgb(255 255 255 / 0.75);
+  }
+  .topbar > .ident {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /*
+   * A narrow window is the normal one here: the editor lives beside a preview or a
+   * terminal as often as it lives full-screen. Rather than let the bar overflow, the
+   * measurements go first and the two verbs keep their icons.
+   */
+  @media (max-width: 1080px) {
+    .topbar > .chips {
+      display: none;
+    }
+    .topbar :global(.compact span) {
+      display: none;
+    }
+  }
+  .topbar > .ident h2 {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .topbar > :global(.btn),
+  .topbar > .chip {
+    flex: none;
+  }
+  .design-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+  }
+  .design-pick {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 0.3rem 0.5rem;
+    cursor: pointer;
+  }
+  .design-pick:hover {
+    border-color: var(--primary);
+  }
+  .readout {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    margin: var(--s3) 0 0;
+    font-size: 0.75rem;
+    color: var(--ink-faint);
+    min-height: 1.1rem;
+  }
+  .readout b {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink);
+  }
   .tool {
     border: 1px solid var(--line);
     border-radius: var(--radius);

@@ -52,3 +52,38 @@ export function regionRect(key: string, rows: number): Rect {
       return { x, y: hotY, w, h: windowHeight(rows) - hotY };
   }
 }
+
+/** Every region of a window with `rows` container rows, top band down to the hotbar. */
+export function allRegionKeys(rows: number): string[] {
+  const keys: string[] = [];
+  const band = (name: string, row: number): void => {
+    for (let col = -1; col <= COLS; col++) keys.push(`${name}:${row}:${col}`);
+  };
+  band("top", 0);
+  for (let row = 0; row < rows; row++) band("con", row);
+  band("gap", 0);
+  for (let row = 0; row < 3; row++) band("inv", row);
+  band("hot", 0);
+  return keys;
+}
+
+/**
+ * Every region whose box meets the rectangle between two window points — what a
+ * shift-drag with the erase tool cuts. Region boxes, not the pixels under the pointer:
+ * brushing a slot's corner takes the whole slot, never a sliver of one.
+ */
+export function regionKeysIn(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  rows: number,
+): string[] {
+  const x0 = Math.min(a.x, b.x);
+  const x1 = Math.max(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  const y1 = Math.max(a.y, b.y);
+
+  return allRegionKeys(rows).filter((key) => {
+    const box = regionRect(key, rows);
+    return box.x <= x1 && box.x + box.w > x0 && box.y <= y1 && box.y + box.h > y0;
+  });
+}

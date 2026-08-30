@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import type { Design } from "../engine/designs";
 import { parseComponent, serializeComponent, type LibraryComponent } from "../engine/components";
 import type { Swatch } from "../engine/palette";
 import { cropToOpaque } from "../engine/ninepatch";
@@ -37,6 +38,13 @@ export interface Profile {
     panelSkin?: string;
     panelSkinBorder?: number;
   };
+  /**
+   * Button designs the pack carries, on top of the built-in set. They live here rather
+   * than in the project because a design is a property of the pack's look: every screen
+   * drawn for this pack should be able to reach for the same ones, the way they already
+   * reach for the same palette.
+   */
+  designs?: Design[];
   codepointRanges?: { module: string; range: [string, string] }[];
   /** The pack's named colours, offered in every colour field and referenced as `@id`. */
   palette?: Swatch[];
@@ -450,6 +458,26 @@ export async function loadInfoboxSkin(backend: FsBackend, pack: LoadedPack): Pro
 
 export async function loadPanelSkin(backend: FsBackend, pack: LoadedPack): Promise<Skin | null> {
   return loadSkin(backend, pack, pack.profile.paths.panelSkin, pack.profile.paths.panelSkinBorder ?? 3);
+}
+
+/**
+ * The artwork behind every ninepatch design the pack declares, by design id.
+ *
+ * A design whose texture will not load is left out rather than failing the pack: the
+ * picker then shows it drawn as a plain plate, which is wrong but visible, instead of
+ * an editor that refuses to open because one PNG was renamed.
+ */
+export async function loadDesignSkins(
+  backend: FsBackend,
+  pack: LoadedPack,
+): Promise<Map<string, Skin>> {
+  const skins = new Map<string, Skin>();
+  for (const design of pack.profile.designs ?? []) {
+    if (design.kind !== "ninepatch") continue;
+    const skin = await loadSkin(backend, pack, design.texture, design.border);
+    if (skin) skins.set(design.id, skin);
+  }
+  return skins;
 }
 
 const COMPONENTS_DIR = "tools/slotify/components";

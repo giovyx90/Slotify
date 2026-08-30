@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { regionKeyAt, regionRect } from "./carve";
+import { allRegionKeys, regionKeyAt, regionKeysIn, regionRect } from "./carve";
 import { renderWindow } from "./chestRenderer";
 import { buildMono5Font } from "./mono5";
 import { cropToOpaque, drawNinepatch } from "./ninepatch";
@@ -9,6 +9,7 @@ import { newProject } from "./project";
 import { alphaAt, makeRaster, type Raster } from "./raster";
 import { renderSheet } from "./renderProject";
 import { drawTileRegion, regionBBox, cellAt, tileRect } from "./tiles";
+import { windowHeight } from "./geometry";
 import { advanceOfGlyph, hexToRgb, renderTextShadowed, shadowOf } from "./textFont";
 
 function rgbAt(raster: Raster, x: number, y: number): [number, number, number] {
@@ -141,23 +142,97 @@ describe("carved holes", () => {
     expect(regionKeyAt(0, 300, 6)).toBeNull();
   });
 
-  it("frames holes outside the grid, and leaves grid holes to the slots' own rings", () => {
-    const carved = renderWindow({ rows: 2, holes: new Set(["top:0:2", "con:0:0"]) });
+  it("frames a hole in the top band without doubling the window's own edge", () => {
+    const carved = renderWindow({ rows: 2, holes: new Set(["top:0:2"]) });
 
-    // The top-band hole: transparent, and the window contour redraws under it.
     expect(alphaAt(carved, 50, 8)).toBe(0);
-    expect(rgbAt(carved, 50, 17)).toEqual([55, 55, 55]); // closed border below the void
+    expect(rgbAt(carved, 50, 17)).toEqual([55, 55, 55]); // the slot below is untouched
+    expect(rgbAt(carved, 0, 0)).toEqual([55, 55, 55]); // and so is the window's corner
+  });
 
-    // The slot-cell hole: transparent, but NXMenu-clean — no extra frame. The left
-    // margin beside it stays flat panel…
-    const region = regionRect("con:0:0", 2);
+  it("frames a hole from the inside, and leaves the slots around it whole", () => {
+    // The frame comes out of the hole's own footprint. Framing from the outside would
+    // have nowhere to go but into the neighbouring wells, two pixels deep on the side
+    // that faces the cut, and a row of slots with a bite out of each reads as damage.
+    const carved = renderWindow({ rows: 3, holes: new Set(["con:1:4"]) });
+    const region = regionRect("con:1:4", 3);
+    const right = region.x + region.w - 1;
+    const bottom = region.y + region.h - 1;
+
     expect(alphaAt(carved, region.x + 9, region.y + 9)).toBe(0);
-    expect(rgbAt(carved, 5, region.y + 9)).toEqual([198, 198, 198]);
-    // …and the neighbouring slot closes itself with its own ring.
-    expect(rgbAt(carved, region.x + region.w, region.y + 9)).toEqual([55, 55, 55]);
 
-    // The window's own outer corner is still an edge.
-    expect(rgbAt(carved, 0, 0)).toEqual([55, 55, 55]);
+    // Outline on the hole's own outermost ring…
+    expect(rgbAt(carved, region.x, region.y + 9)).toEqual([55, 55, 55]);
+    expect(rgbAt(carved, right, region.y + 9)).toEqual([55, 55, 55]);
+    expect(rgbAt(carved, region.x + 9, region.y)).toEqual([55, 55, 55]);
+    expect(rgbAt(carved, region.x + 9, bottom)).toEqual([55, 55, 55]);
+
+    // …then a bevel one pixel in, lit the way the window's own border is.
+    expect(rgbAt(carved, region.x + 1, region.y + 9)).toEqual([255, 255, 255]);
+    expect(rgbAt(carved, right - 1, region.y + 9)).toEqual([85, 85, 85]);
+    expect(rgbAt(carved, region.x + 9, region.y + 1)).toEqual([255, 255, 255]);
+    expect(rgbAt(carved, region.x + 9, bottom - 1)).toEqual([85, 85, 85]);
+
+    // Every neighbouring well still has its whole ring.
+    expect(rgbAt(carved, region.x - 1, region.y + 9)).toEqual([255, 255, 255]);
+    expect(rgbAt(carved, region.x + region.w, region.y + 9)).toEqual([55, 55, 55]);
+  });
+
+  it("leaves the panel beside a hole at the end of a row alone", () => {
+    const carved = renderWindow({ rows: 2, holes: new Set(["con:0:8"]) });
+    const region = regionRect("con:0:8", 2);
+    const right = region.x + region.w - 1;
+
+    expect(alphaAt(carved, region.x + 9, region.y + 9)).toBe(0);
+    expect(rgbAt(carved, region.x + region.w, region.y + 9)).toEqual([198, 198, 198]);
+    expect(rgbAt(carved, right, region.y + 9)).toEqual([55, 55, 55]);
+    expect(rgbAt(carved, right - 1, region.y + 9)).toEqual([85, 85, 85]);
+  });
+
+  it("leaves a covered slot beside a hole exactly as covered", () => {
+    const carved = renderWindow({
+      rows: 2,
+      holes: new Set(["con:0:0"]),
+      hiddenContainerSlots: new Set([1]),
+    });
+    const region = regionRect("con:0:0", 2);
+
+    expect(rgbAt(carved, region.x + region.w, region.y + 9)).toEqual([198, 198, 198]);
+    expect(rgbAt(carved, region.x + region.w - 1, region.y + 9)).toEqual([55, 55, 55]);
+  });
+
+  it("gives two adjacent holes one frame, with no seam between them", () => {
+    const carved = renderWindow({ rows: 2, holes: new Set(["con:0:3", "con:0:4"]) });
+    const left = regionRect("con:0:3", 2);
+    const right = regionRect("con:0:4", 2);
+
+    // The shared boundary is interior to the void: nothing is drawn along it.
+    for (let y = left.y + 2; y < left.y + left.h - 2; y++) {
+      expect(alphaAt(carved, right.x, y), `seam at y=${y}`).toBe(0);
+    }
+    expect(rgbAt(carved, left.x, left.y + 9)).toEqual([55, 55, 55]);
+    expect(rgbAt(carved, right.x + right.w - 1, right.y + 9)).toEqual([55, 55, 55]);
+  });
+
+  it("covers the whole window with region keys, and no more", () => {
+    // top + rows + gap + 3 inventory + hotbar bands, each 11 columns wide with margins.
+    expect(allRegionKeys(2)).toHaveLength(8 * 11);
+    expect(new Set(allRegionKeys(6)).size).toBe(allRegionKeys(6).length);
+    for (let y = 0; y < windowHeight(3); y++) {
+      const key = regionKeyAt(0, y, 3);
+      expect(allRegionKeys(3), `row ${y}`).toContain(key);
+    }
+  });
+
+  it("takes whole regions in a shift-drag, never a sliver of one", () => {
+    expect(regionKeysIn({ x: 10, y: 25 }, { x: 10, y: 25 }, 2)).toEqual(["con:0:0"]);
+    expect(regionKeysIn({ x: 10, y: 25 }, { x: 46, y: 25 }, 2)).toEqual([
+      "con:0:0",
+      "con:0:1",
+      "con:0:2",
+    ]);
+    // A single pixel inside the third slot still takes the third slot entire.
+    expect(regionKeysIn({ x: 44, y: 33 }, { x: 44, y: 33 }, 2)).toEqual(["con:0:2"]);
   });
 
   it("bakes the carved window into the sheet when bakeWindow is on", () => {

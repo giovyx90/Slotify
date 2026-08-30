@@ -30,7 +30,9 @@ al push sul server dev.
 13. [Esportare](#13-esportare)
 14. [Push sul server dev](#14-push-sul-server-dev)
 15. [Progetti e profili](#15-progetti-e-profili)
-16. [Problemi comuni](#16-problemi-comuni)
+16. [Lingua, tema e pannelli](#16-lingua-tema-e-pannelli)
+17. [I design del bottone](#17-i-design-del-bottone)
+18. [Problemi comuni](#18-problemi-comuni)
 
 ---
 
@@ -110,12 +112,26 @@ cassa (con le guide: hit-rect degli slot, area inventario) e a destra le **misur
 Le checkbox **Overlays** impilano i fogli della stessa cartella esattamente come li
 impilerebbe il titolo in gioco: un errore di advance si vede qui come si vedrebbe lì.
 
-Da qui: **Open in editor** per modificare un foglio esistente, **+ New screen** per
+Da qui: **Apri nell'editor** per modificare un foglio esistente, **+ Nuova schermata** per
 partire da zero, **Tag generator** per il testo pixel.
 
 ---
 
 ## 4. L'editor: creare una schermata
+
+**Il nome viene chiesto subito.** *Nuova schermata* apre un riquadro con quattro campi:
+**modulo**, **schermata**, **codepoint** (già proposto libero dal registro del pack) e
+**righe**. Sotto, mentre scrivi, la finestra dice come si chiamerà il file del progetto
+(`<modulo>-<schermata>.guiproj.json`) e dove finirà la texture
+(`custom_ui/<modulo>/<schermata>.png`), e ti avvisa se un progetto con quel nome c'è già.
+
+I due nomi non sono decorazione: sono il file del progetto, il percorso della texture che
+scrive l'export e le costanti Java che genera lo scaffold. Prima si scrivevano
+`mymodule` e `screen1` e non c'era modo di cambiarli; sbagliarli costa una rinomina in
+quattro posti, sceglierli costa un riquadro.
+
+Maiuscole e spazi vengono messi in minuscolo e uniti con `_`, perché è quello che un nome
+di file e una costante Java hanno in comune.
 
 Il principio da tenere a mente: **disegni sempre la finestra che il giocatore vedrà.**
 Le coordinate sono quelle della finestra; l'ascent si applica solo quando il foglio
@@ -143,6 +159,12 @@ esportato.
 
 ## 5. Gli strumenti, uno per uno
 
+**Quasi tutto si trascina.** Un bottone di quattro celle è un trascinamento, non quattro
+tap; una fila di nove slot è un trascinamento e lo strumento resta in mano; coprire mezza
+riga è un trascinamento. La regola è sempre la stessa: **il puntatore che scende decide
+cosa fa tutto il gesto**, e quello che attraversa lo subisce — passare due volte sulla
+stessa cella non la disfa a metà strada. Un tratto intero vale **un solo annulla**.
+
 | Strumento | Cosa fa |
 |---|---|
 | **select** | Seleziona, trascina (gli elementi agganciano i bordi degli altri entro 3px — è così che i pezzi si "connettono"), **ridimensiona dalle otto maniglie** della selezione, rifinisce col nudge pad o con le frecce |
@@ -150,8 +172,8 @@ esportato.
 | **plate** | Lo stesso bottone **fuori dal reticolo da 18px**: premi e trascina, e il bottone è grande quanto il trascinamento. Un clic secco senza trascinare dà 40×18. Dall'ispettore si converte nei due sensi — «Snap onto the lattice» lo riaggancia alle celle che copre, «Free from the lattice» libera un gruppo di tiles tenendone il riquadro |
 | **infobox** | Piazza **l'infobox standard del progetto**: larghezza piena (176px), altezza nativa della texture dell'artista, agganciata alla riga toccata. Ridimensionabile dai campi w/h; oltre **12 tiles di larghezza si spezza** in una seconda box. Può stare **anche fuori dalla GUI** (a fianco o sotto, ovunque nel canvas 256) |
 | **slot** | Uno slot vanilla in più, agganciato alla griglia |
-| **erase** | **Scava un buco vero**: tap su qualsiasi regione della finestra (slot, fascia del titolo, gap, margini) → trasparenza piena. Dentro la griglia i vicini si richiudono coi loro bordi; fuori griglia il contorno della finestra si ridisegna attorno al buco. Tap di nuovo per ripristinare |
-| **cover** | Il fratello gentile di erase: lo slot **sparisce ma resta il grigio** del pannello, come se non fosse mai stato disegnato. Vale per container, inventario e hotbar |
+| **erase** | **Scava un buco vero**: tap su qualsiasi regione della finestra (slot, fascia del titolo, gap, margini) → trasparenza piena, e **il buco si incornicia da dentro**: un pixel di contorno scuro sul suo giro esterno, poi un pixel di bevel acceso come il bordo della finestra (chiaro sotto il lato alto e a destra di quello sinistro). La cornice esce dallo spazio rimosso, non da quello attorno: **gli slot vicini restano interi**, cosa che non sarebbe possibile incorniciando da fuori, perché una regione tagliata è esattamente il riquadro che occupa un incavo con il suo anello. Due buchi attaccati condividono una cornice sola. **Trascina** per tagliare una fila intera, **shift+trascina** per un blocco rettangolare: il tratto vale un solo annulla. Tap di nuovo per ripristinare |
+| **cover** | Il fratello gentile di erase: lo slot **sparisce ma resta il grigio** del pannello, come se non fosse mai stato disegnato. Vale per container, inventario e hotbar. Anche questo si **trascina**: il primo slot decide se la passata copre o scopre, e tutti quelli attraversati fanno la stessa cosa |
 | **text** | Testo libero nel font di gioco o nel mono 5×5, si auto-misura |
 | **panel** | Il **box del titolo del progetto** (la texture `boxtitolo`) reso come ninepatch a qualunque dimensione, con label centrata. Con un colore custom passa al disegno procedurale |
 | **well** | Un incavo (inset) libero, per pozzetti decorativi |
@@ -500,7 +522,77 @@ credenziali — quelli stanno in `*.profile.local.json` (gitignorato) e nel keyc
 
 ---
 
-## 16. Problemi comuni
+## 16. Lingua, tema e pannelli
+
+In alto a destra, in tutte e tre le schermate, ci sono due interruttori.
+
+**IT / EN** cambia la lingua di tutta l'interfaccia. Alla prima apertura Slotify guarda
+la lingua del sistema: italiano se il computer è italiano, inglese altrimenti. La scelta
+resta su questa macchina e non finisce nel profilo, perché il profilo è del pack e lo
+scarica anche chi non parla la tua lingua.
+
+Il vocabolario italiano dell'app è quello di questa guida: *schermata*, *foglio*,
+*incavo*, *stato*. Restano in inglese i nomi degli strumenti (`erase`, `cover`, `plate`,
+`paint`: sono l'identità dello strumento e la sua scorciatoia) e le tre parole che usa il
+formato del pack, `ascent`, `advance`, `codepoint`.
+
+**auto / chiaro / scuro** cambia il tema. `auto` segue il sistema. Il tema scuro non è un
+vezzo: si disegna pixel art di notte e su arte scura, e la scacchiera che vuol dire
+*trasparente* deve leggersi come una superficie, non come una luce. Le guide sulla tela
+cambiano colore insieme al tema, altrimenti su fondo nero non guiderebbero niente.
+
+**I pannelli si chiudono.** Ogni riquadro delle due colonne ha una freccia nel titolo: la
+colonna destra non è più una pila di dodici schede aperte da scorrere. Un pannello chiuso
+continua a dire la cosa che conta — quanti layer, quanti colori, quale design — e
+riapre come l'avevi lasciato la prossima volta che apri Slotify.
+
+---
+
+## 17. I design del bottone
+
+Fino alla 0.2 un bottone aveva tre aspetti, scelti da una tendina chiamata `edge`:
+`single`, `double`, `flat`. Sono lo stesso bottone con il bordo più o meno profondo, ed è
+il motivo per cui ogni schermata fatta con Slotify somigliava a tutte le altre.
+
+Adesso il riquadro **Selezione** ha una riga **design**. Cliccala e si apre una galleria:
+ogni riquadro è un'anteprima **disegnata dallo stesso codice che disegnerà il bottone
+vero**, ingrandita, così un angolo da un pixel si vede. Un'anteprima disegnata in un
+altro modo è un'anteprima che può mentire, ed evitare che l'arte misuri diversamente da
+quello che ti è stato mostrato è tutto il mestiere di questo strumento.
+
+I design di serie sono sette: `Vanilla`, `Double edge`, `Flat`, `Cut corners`,
+`Round corners`, `Round, deep`, `Cut and flat`. Le due novità vere sono gli **angoli**:
+*cut* mangia un pixel per angolo, *round* ne mangia tre, e in tutti e due i casi il bordo
+si richiude sulla diagonale tenendo la luce in alto a sinistra. L'angolo mangiato **torna
+a quello che c'era sotto** — pannello, arte, niente — non a un buco: un bottone non è la
+finestra, e un angolo tagliato non deve bucarla.
+
+Scegliendo `Liscio` il bottone torna a non avere design e ricompare la tendina `edge`.
+
+**Un pack può portarsi i suoi.** Nel profilo (`slotify.profile.json`), accanto a
+`palette`, si può dichiarare `designs`:
+
+```json
+"designs": [
+  { "kind": "recipe", "id": "cassa", "name": "Cassa", "bevel": "double", "corners": "round" },
+  { "kind": "ninepatch", "id": "bottone-nexo", "name": "Bottone NEXO",
+    "texture": "pack-source/_shared/.../bottone.png", "border": 3 }
+]
+```
+
+Una `recipe` è disegnata dal motore e vale a qualsiasi misura. Un `ninepatch` è un PNG:
+gli angoli si copiano tali e quali, i lati e il centro si **ripetono**, mai stirati —
+è lo stesso meccanismo che dal v3 disegna l'infobox NEXT. Un design con lo stesso `id` di
+uno di serie lo sostituisce; un design il cui PNG non si carica non blocca il pack,
+semplicemente non compare.
+
+Un progetto salvato prima che i design esistessero non nomina nessun design e si disegna
+esattamente come prima. Un progetto che nomina un design che il pack non ha più si apre
+lo stesso, disegnato come un bottone liscio.
+
+---
+
+## 18. Problemi comuni
 
 | Sintomo | Causa e rimedio |
 |---|---|

@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { t } from "../i18n/i18n.svelte";
+  import Prefs from "./kit/Prefs.svelte";
   import { encodePng } from "../engine/png";
   import { renderTag, type TagStyle } from "../engine/tagGenerator";
   import { slugify } from "../engine/components";
@@ -100,61 +102,63 @@
 
 <div class="app">
   <header class="topbar">
-    <button class="btn ghost" onclick={onExit}>← Viewer</button>
+    <button class="btn ghost" onclick={onExit}>← {t("chrome.viewer")}</button>
 
     <div class="ident">
-      <span class="label-mono">Tag generator</span>
+      <span class="label-mono">{t("tag.title")}</span>
       <h2>{text || "untitled"}</h2>
     </div>
 
     <div class="spacer"></div>
 
+    <Prefs />
+
     {#if tag}
       <span class="chip">{tag.width}×{tag.height} px</span>
     {/if}
-    <button class="btn" onclick={saveToLibrary}>Save to library</button>
-    <button class="btn primary" onclick={download}>Download PNG</button>
+    <button class="btn" onclick={saveToLibrary}>{t("btn.saveToLibrary")}</button>
+    <button class="btn primary" onclick={download}>{t("btn.downloadPng")}</button>
   </header>
 
   <div class="workspace two">
     <aside class="pane left">
       <section class="card">
-        <div class="card-head"><span class="label-mono">Text</span></div>
-        <label class="field"><span>words</span><input bind:value={text} /></label>
+        <div class="card-head"><span class="label-mono">{t("panel.text")}</span></div>
+        <label class="field"><span>{t("field.words")}</span><input bind:value={text} /></label>
         <div class="grid2 top">
-          <label class="field"><span>font</span>
+          <label class="field"><span>{t("kv.font")}</span>
             <select bind:value={fontChoice}>
-              <option value="mono5">mono 5×5</option>
-              {#if fonts.minecraft}<option value="minecraft">minecraft</option>{/if}
+              <option value="mono5">{t("option.mono5")}</option>
+              {#if fonts.minecraft}<option value="minecraft">{t("option.minecraft")}</option>{/if}
             </select>
           </label>
-          <label class="field"><span>scale</span><input type="number" min="1" max="8" bind:value={scale} /></label>
-          <label class="field"><span>spacing</span><input type="number" min="-1" max="4" bind:value={letterSpacing} /></label>
+          <label class="field"><span>{t("field.scale")}</span><input type="number" min="1" max="8" bind:value={scale} /></label>
+          <label class="field"><span>{t("field.spacing")}</span><input type="number" min="-1" max="4" bind:value={letterSpacing} /></label>
         </div>
       </section>
 
       <section class="card">
-        <div class="card-head"><span class="label-mono">Fill</span></div>
+        <div class="card-head"><span class="label-mono">{t("panel.fill")}</span></div>
         <div class="grid2">
-          <label class="field"><span>top</span><input type="color" bind:value={fill} /></label>
+          <label class="field"><span>{t("field.top")}</span><input type="color" bind:value={fill} /></label>
           {#if useGradient}
-            <label class="field"><span>bottom</span><input type="color" bind:value={fillTo} /></label>
+            <label class="field"><span>{t("field.bottom")}</span><input type="color" bind:value={fillTo} /></label>
           {/if}
         </div>
-        <label class="check"><input type="checkbox" bind:checked={useGradient} /> vertical gradient</label>
+        <label class="check"><input type="checkbox" bind:checked={useGradient} /> {t("check.verticalGradient")}</label>
       </section>
 
       <section class="card">
-        <div class="card-head"><span class="label-mono">Effects</span></div>
-        <label class="check"><input type="checkbox" bind:checked={useOutline} /> outline</label>
+        <div class="card-head"><span class="label-mono">{t("panel.effects")}</span></div>
+        <label class="check"><input type="checkbox" bind:checked={useOutline} /> {t("check.outline")}</label>
         {#if useOutline}
-          <label class="field"><span>outline colour</span><input type="color" bind:value={outline} /></label>
+          <label class="field"><span>{t("field.outlineColour")}</span><input type="color" bind:value={outline} /></label>
         {/if}
-        <label class="check"><input type="checkbox" bind:checked={useShadow} /> shadow</label>
+        <label class="check"><input type="checkbox" bind:checked={useShadow} /> {t("check.shadow")}</label>
         {#if useShadow}
           <div class="grid2">
-            <label class="field"><span>colour</span><input type="color" bind:value={shadow} /></label>
-            <label class="field"><span>direction</span>
+            <label class="field"><span>{t("field.colour")}</span><input type="color" bind:value={shadow} /></label>
+            <label class="field"><span>{t("field.direction")}</span>
               <select bind:value={shadowDir}>
                 {#each Object.keys(SHADOW_OFFSETS) as dir}<option value={dir}>{dir}</option>{/each}
               </select>
@@ -164,13 +168,13 @@
       </section>
 
       <section class="card">
-        <div class="card-head"><span class="label-mono">Plate</span></div>
-        <label class="check"><input type="checkbox" bind:checked={useBackground} /> draw a background plate</label>
+        <div class="card-head"><span class="label-mono">{t("panel.plate")}</span></div>
+        <label class="check"><input type="checkbox" bind:checked={useBackground} /> {t("check.backgroundPlate")}</label>
         {#if useBackground}
           <div class="grid2 top">
-            <label class="field"><span>fill</span><input type="color" bind:value={bgFill} /></label>
-            <label class="field"><span>border</span><input type="color" bind:value={bgBorder} /></label>
-            <label class="field"><span>padding</span><input type="number" min="0" max="8" bind:value={padding} /></label>
+            <label class="field"><span>{t("field.fill")}</span><input type="color" bind:value={bgFill} /></label>
+            <label class="field"><span>{t("field.border")}</span><input type="color" bind:value={bgBorder} /></label>
+            <label class="field"><span>{t("field.padding")}</span><input type="number" min="0" max="8" bind:value={padding} /></label>
           </div>
         {/if}
       </section>
@@ -188,7 +192,7 @@
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="M4 7V5h16v2M9 19h6M12 5v14" />
           </svg>
-          <p>Type something on the left. It is rendered in the pack's own bitmap font, at the pixel — no anti-aliasing, nothing to clean up afterwards.</p>
+          <p>{t("hint.tagEmpty")}</p>
         </div>
       {/if}
     </section>

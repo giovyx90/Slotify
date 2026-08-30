@@ -95,6 +95,115 @@
   --check: #e3e6ec;
 
   --topbar-h: 54px;
+  --rail-left: 288px;
+  --rail-right: 316px;
+
+  /* Spacing. Every gap and pad in this file came from this ladder, so a screen that
+     feels loose or cramped is one edit away from not being. */
+  --s1: 0.25rem;
+  --s2: 0.4rem;
+  --s3: 0.6rem;
+  --s4: 0.85rem;
+  --s5: 1.15rem;
+  --s6: 1.6rem;
+
+  /* Stacking. Four levels is all this interface has, and naming them stops the next
+     panel from being pushed above a dialog by a number somebody guessed. */
+  --z-sticky: 10;
+  --z-rail: 20;
+  --z-popover: 40;
+  --z-modal: 60;
+  --z-toast: 80;
+
+  /* Motion. Short enough that nothing is ever waited for. */
+  --dur-fast: 90ms;
+  --dur: 150ms;
+  --ease: cubic-bezier(0.2, 0, 0.13, 1);
+
+  --focus: var(--primary);
+}
+
+/*
+ * Dark.
+ *
+ * A pixel-art tool is used at night and against dark artwork, and the checkerboard that
+ * means "transparent" has to read as a surface, not as a light. The ramp is the portal's
+ * inverted, not a different design: the same red does the same job, the ink ladder keeps
+ * its three steps, and structure still comes from one line and one raised surface.
+ *
+ * Only the tokens are redefined here. Nothing in this file may take its single
+ * definition from inside a theme block, or the other theme loses it.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --primary: #ff4d57;
+  --primary-hover: #ff6b74;
+  --primary-press: #e63d47;
+  --primary-soft: #3a1519;
+  --primary-deep: #ff9098;
+
+  --ink: #eceef2;
+  --ink-soft: #a6aeb9;
+  --ink-faint: #6d757f;
+
+  --surface: #16181d;
+  --canvas: #0d0f12;
+  --line: #262a31;
+  --line-strong: #363c45;
+  --hover: rgb(255 255 255 / 0.06);
+
+  --success: #35c46b;
+  --success-soft: #10301e;
+  --warning: #f0b429;
+  --warning-soft: #33280c;
+  --danger: #ff5964;
+  --danger-soft: #3a1519;
+  --info: #5b9cf0;
+  --info-soft: #12233d;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 18px rgb(0 0 0 / 0.35);
+  --shadow-red: 0 4px 14px rgb(255 77 87 / 0.32);
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / 0.6);
+
+  --check: #1e2127;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --primary: #ff4d57;
+    --primary-hover: #ff6b74;
+    --primary-press: #e63d47;
+    --primary-soft: #3a1519;
+    --primary-deep: #ff9098;
+
+    --ink: #eceef2;
+    --ink-soft: #a6aeb9;
+    --ink-faint: #6d757f;
+
+    --surface: #16181d;
+    --canvas: #0d0f12;
+    --line: #262a31;
+    --line-strong: #363c45;
+    --hover: rgb(255 255 255 / 0.06);
+
+    --success: #35c46b;
+    --success-soft: #10301e;
+    --warning: #f0b429;
+    --warning-soft: #33280c;
+    --danger: #ff5964;
+    --danger-soft: #3a1519;
+    --info: #5b9cf0;
+    --info-soft: #12233d;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 18px rgb(0 0 0 / 0.35);
+    --shadow-red: 0 4px 14px rgb(255 77 87 / 0.32);
+    --shadow-pop: 0 10px 30px rgb(0 0 0 / 0.6);
+
+    --check: #1e2127;
+  }
 }
 
 /* ── Base ───────────────────────────────────────────────────────────────────────── */
@@ -125,7 +234,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -257,7 +366,7 @@ h4 {
 /* Three columns: navigation, the artwork, the numbers. */
 .workspace {
   display: grid;
-  grid-template-columns: 288px minmax(0, 1fr) 316px;
+  grid-template-columns: var(--rail-left) minmax(0, 1fr) var(--rail-right);
   min-height: 0;
 }
 

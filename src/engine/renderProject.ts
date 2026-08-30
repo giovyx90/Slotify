@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { renderWindow } from "./chestRenderer";
 import { SHEET_CANVAS, SHEET_TO_WINDOW_Y, windowHeight } from "./geometry";
+import { cornerRadius, designById, type Design } from "./designs";
 import { drawNinepatch } from "./ninepatch";
 import {
+  carveCorners,
   drawInset,
   drawPlate,
   drawRaised,
@@ -46,6 +48,10 @@ export interface RenderContext {
   infoboxSkin?: { raster: Raster; border: number };
   /** The profile's panel/title-box texture (NEXT: boxtitolo), same treatment. */
   panelSkin?: { raster: Raster; border: number };
+  /** Designs the pack declares, on top of the built-in set. */
+  designs?: readonly Design[];
+  /** Decoded artwork for the ninepatch designs, by design id. */
+  designSkins?: Map<string, { raster: Raster; border: number }>;
   /** The pack's named colours. The project's own palette is consulted first. */
   palette?: Swatch[];
   /**
@@ -227,7 +233,16 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
 
     case "button": {
       const { fill, bevels } = bevelsFor(element);
-      if (element.bevel && element.bevel !== "single") {
+      const design = designById(element.design, context.designs);
+      const skin = design?.kind === "ninepatch" ? context.designSkins?.get(design.id) : undefined;
+      if (skin) {
+        drawNinepatch(sheet, skin.raster, skin.border, x, y, element.w, element.h);
+      } else if (design?.kind === "recipe") {
+        drawPlate(
+          sheet, x, y, element.w, element.h, fill, bevels,
+          element.pressed ?? false, design.bevel, cornerRadius(design.corners),
+        );
+      } else if (element.bevel && element.bevel !== "single") {
         drawPlate(sheet, x, y, element.w, element.h, fill, bevels, element.pressed ?? false, element.bevel);
       } else if (element.pressed) {
         drawInset(sheet, x, y, element.w, element.h, fill, bevels);
@@ -295,7 +310,24 @@ function drawElement(sheet: Raster, element: Element, dy: number, context: Rende
         drawInfoboxLines(sheet, context, element, box.x, box.y + dy);
       } else {
         const { fill, bevels } = bevelsFor(element);
-        drawTileRegion(sheet, cells, fill, bevels, element.pressed ?? false, dy, element.bevel ?? "single");
+        const design = designById(element.design, context.designs);
+        const skin = design?.kind === "ninepatch" ? context.designSkins?.get(design.id) : undefined;
+        if (skin) {
+          drawNinepatch(sheet, skin.raster, skin.border, box.x, box.y + dy, box.w, box.h);
+        } else {
+          const style = design?.kind === "recipe" ? design.bevel : (element.bevel ?? "single");
+          drawTileRegion(sheet, cells, fill, bevels, element.pressed ?? false, dy, style);
+          // A corner treatment needs a rectangle to have corners. A merged region
+          // that is not one keeps its square ends rather than losing pixels it never
+          // agreed to lose.
+          const radius = design?.kind === "recipe" ? cornerRadius(design.corners) : 0;
+          if (radius > 0 && cells.length === (box.w / 18) * (box.h / 18)) {
+            const pressed = element.pressed ?? false;
+            const top = pressed ? bevels.dark : bevels.light;
+            const bottom = pressed ? bevels.light : bevels.dark;
+            carveCorners(sheet, box.x, box.y + dy, box.w, box.h, radius, top, bottom);
+          }
+        }
         if (element.label && font) {
           drawLabelCentred(sheet, font, element, box.x, box.y + dy, box.w, box.h, TEXT_DEFAULT);
         }

@@ -90,6 +90,12 @@ export const ElementSchema = z.object({
   lineGap: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional(),
   /** Button/tile-button edge treatment. Default single, the vanilla one-pixel bevel. */
   bevel: PlateStyleSchema.optional(),
+  /**
+   * A named design from the pack's set, or a built-in id. Optional on purpose: a
+   * project written before designs existed names none and draws exactly as it did.
+   * An id nothing answers to falls back to the plain plate rather than failing.
+   */
+  design: z.string().optional(),
   /** Where a label or the infobox lines sit across the box. Default centre. */
   align: TextAlignSchema.optional(),
   /** Nudges the text off that position, in pixels. */

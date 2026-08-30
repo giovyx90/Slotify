@@ -106,11 +106,20 @@ export function drawPlate(
   bevels: BevelSet,
   pressed = false,
   style: PlateStyle = "single",
+  /** Pixels eaten out of each corner: 0 square, 1 cut, 2 rounded. */
+  radius = 0,
 ): void {
+  // What the corners held before the plate covered them. A cut corner is not part of
+  // the button, so whatever was under it — panel, artwork, nothing — has to come back.
+  // Writing transparency instead would punch a hole through the window beneath.
+  const kept = keepCorners(raster, x, y, w, h, radius);
+
   rect(raster, x, y, w, h, fill);
 
   if (style === "flat") {
     outline(raster, x, y, w, h, bevels.edge);
+    restoreCorners(raster, kept);
+    carveCorners(raster, x, y, w, h, radius, bevels.edge, bevels.edge);
     return;
   }
 
@@ -131,6 +140,84 @@ export function drawPlate(
     for (let dy = 0; dy < height - 1; dy++) {
       put(raster, left, upper + dy, top);
       put(raster, left + width - 1, upper + dy + 1, bottom);
+    }
+  }
+
+  restoreCorners(raster, kept);
+  carveCorners(raster, x, y, w, h, radius, top, bottom);
+}
+
+/** The pixels a corner treatment will eat, read before anything covers them. */
+export interface KeptCorners {
+  radius: number;
+  pixels: { x: number; y: number; colour: RGBA }[];
+}
+
+function cornerOrigins(x: number, y: number, w: number, h: number) {
+  return [
+    { ox: x, oy: y, sx: 1, sy: 1, horizontal: "top", vertical: "top" },
+    { ox: x + w - 1, oy: y, sx: -1, sy: 1, horizontal: "top", vertical: "bottom" },
+    { ox: x, oy: y + h - 1, sx: 1, sy: -1, horizontal: "bottom", vertical: "top" },
+    { ox: x + w - 1, oy: y + h - 1, sx: -1, sy: -1, horizontal: "bottom", vertical: "bottom" },
+  ] as const;
+}
+
+/** Too small to lose its corners and still be a shape. */
+function tooSmall(w: number, h: number, radius: number): boolean {
+  return radius <= 0 || w < radius * 2 + 1 || h < radius * 2 + 1;
+}
+
+export function keepCorners(raster: Raster, x: number, y: number, w: number, h: number, radius: number): KeptCorners {
+  const kept: KeptCorners = { radius, pixels: [] };
+  if (tooSmall(w, h, radius)) return { radius: 0, pixels: [] };
+
+  for (const corner of cornerOrigins(x, y, w, h)) {
+    for (let dx = 0; dx < radius; dx++) {
+      for (let dy = 0; dy < radius - dx; dy++) {
+        const px = corner.ox + dx * corner.sx;
+        const py = corner.oy + dy * corner.sy;
+        if (px < 0 || px >= raster.width || py < 0 || py >= raster.height) continue;
+        const at = (py * raster.width + px) * 4;
+        kept.pixels.push({
+          x: px,
+          y: py,
+          colour: [raster.data[at]!, raster.data[at + 1]!, raster.data[at + 2]!, raster.data[at + 3]!],
+        });
+      }
+    }
+  }
+  return kept;
+}
+
+export function restoreCorners(raster: Raster, kept: KeptCorners): void {
+  for (const pixel of kept.pixels) put(raster, pixel.x, pixel.y, pixel.colour);
+}
+
+/**
+ * Re-closes the rim along the diagonal a corner treatment leaves behind.
+ *
+ * `radius` is how deep the bite goes: 1 takes the single corner pixel (a cut corner), 2
+ * takes three (a rounded one). The pixels sitting exactly on the new diagonal take the
+ * rim colour of whichever edge they lean towards, so a rounded button still reads as lit
+ * from the top left instead of losing its light where it turns.
+ */
+export function carveCorners(
+  raster: Raster,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+  top: RGBA,
+  bottom: RGBA,
+): void {
+  if (tooSmall(w, h, radius)) return;
+
+  for (const corner of cornerOrigins(x, y, w, h)) {
+    for (let dx = 0; dx <= radius; dx++) {
+      const dy = radius - dx;
+      const colour = dx > dy ? corner.horizontal : corner.vertical;
+      put(raster, corner.ox + dx * corner.sx, corner.oy + dy * corner.sy, colour === "top" ? top : bottom);
     }
   }
 }

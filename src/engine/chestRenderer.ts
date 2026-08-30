@@ -90,24 +90,20 @@ export function renderWindow(options: RenderOptions): Raster {
       put(raster, WINDOW_W - 2, y, PANEL_DARK);
     }
   } else {
-    // 0 outside (framed), 1 panel, 2 edge, 3 light bevel, 4 dark bevel,
-    // 5 frameless hole — a slot cell punched out INSIDE the grid. The window contour
-    // must not wrap those: the neighbouring slots' own rings already close the border,
-    // NXMenu-style, and an extra edge+bevel there reads as a broken frame.
-    const FRAMELESS = 5;
-    const framelessHole = (key: string): boolean => {
-      const [band, , colText] = key.split(":") as [string, string, string];
-      const col = Number(colText);
-      return (band === "con" || band === "inv" || band === "hot") && col >= 0 && col < COLS;
-    };
-
+    // 0 outside (framed), 1 panel, 2 edge, 3 light bevel, 4 dark bevel, 5 hole.
+    //
+    // A hole does not drive this contour. It gets its frame from `rimHoles` below,
+    // drawn *inside* its own footprint once the wells are down — so a cut takes its
+    // border out of the space it removed, and the slots it sits between keep every
+    // pixel of their rings. Framing it from the outside instead would eat two pixels
+    // off each neighbour, and a row of clipped slots reads as damage, not as a cut.
+    const HOLE = 5;
     const mask = new Uint8Array(WINDOW_W * height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
         if (y < cropTop || y >= height - cropBottom) continue; // shaved: framed outside
         const key = regionKeyAt(x, y, options.rows);
-        mask[y * WINDOW_W + x] =
-          key === null ? 0 : holes?.has(key) ? (framelessHole(key) ? FRAMELESS : 0) : 1;
+        mask[y * WINDOW_W + x] = key === null ? 0 : holes?.has(key) ? HOLE : 1;
       }
     }
 
@@ -121,7 +117,6 @@ export function renderWindow(options: RenderOptions): Raster {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < WINDOW_W; x++) {
         if (!isPanelish(x, y)) continue;
-        // Only a framed void makes an edge; a frameless grid hole leaves the panel flat.
         if (at(x - 1, y) === 0 || at(x + 1, y) === 0 || at(x, y - 1) === 0 || at(x, y + 1) === 0) {
           mask[y * WINDOW_W + x] = 2;
         }
@@ -178,7 +173,77 @@ export function renderWindow(options: RenderOptions): Raster {
     }
   }
 
+  rimHoles(raster, options.rows, holes);
+
   return raster;
+}
+
+/**
+ * The frame around a carved hole, drawn last and drawn *inside* it.
+ *
+ * A hole is a window cut through the panel, and a window has a frame. The frame comes out
+ * of the hole's own footprint: one pixel of dark outline on its outermost ring, then one
+ * of bevel lit the way this window's border is lit — light below the top edge and right
+ * of the left one, dark above the bottom and left of the right. What stays transparent is
+ * the hole minus its frame.
+ *
+ * Inside rather than outside, and that is the whole decision. A carved region is exactly
+ * the box a slot well fills, so a frame drawn on the outside has nowhere to go but into
+ * the neighbouring wells, two pixels deep on the side that faces the cut. A row of slots
+ * with a bite out of each reads as damage. This way every slot around a hole keeps its
+ * whole ring and the cut still has an edge.
+ *
+ * Two holes side by side share one frame: the boundary between them is interior to the
+ * void, so nothing is drawn along it.
+ */
+function rimHoles(raster: Raster, rows: number, holes: ReadonlySet<string> | undefined): void {
+  if (!holes || holes.size === 0) return;
+  const height = windowHeight(rows);
+
+  // Outside the window counts as void too, so a hole against the window's own edge is
+  // not given a second border where the frame already is.
+  const isVoid = (x: number, y: number): boolean => {
+    if (x < 0 || x >= WINDOW_W || y < 0 || y >= height) return true;
+    const key = regionKeyAt(x, y, rows);
+    return key === null || holes.has(key);
+  };
+
+  const carved = new Uint8Array(WINDOW_W * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < WINDOW_W; x++) {
+      const key = regionKeyAt(x, y, rows);
+      if (key !== null && holes.has(key)) carved[y * WINDOW_W + x] = 1;
+    }
+  }
+
+  // The outline: carved pixels that touch something still standing.
+  const outline = new Uint8Array(WINDOW_W * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < WINDOW_W; x++) {
+      if (carved[y * WINDOW_W + x] !== 1) continue;
+      if (!isVoid(x - 1, y) || !isVoid(x + 1, y) || !isVoid(x, y - 1) || !isVoid(x, y + 1)) {
+        outline[y * WINDOW_W + x] = 1;
+      }
+    }
+  }
+
+  const isOutline = (x: number, y: number): boolean =>
+    x >= 0 && x < WINDOW_W && y >= 0 && y < height && outline[y * WINDOW_W + x] === 1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < WINDOW_W; x++) {
+      if (carved[y * WINDOW_W + x] !== 1 || outline[y * WINDOW_W + x] === 1) continue;
+      if (isOutline(x, y - 1) || isOutline(x - 1, y)) put(raster, x, y, PANEL_LIGHT);
+      else if (isOutline(x, y + 1) || isOutline(x + 1, y)) put(raster, x, y, PANEL_DARK);
+    }
+  }
+
+  // The outline last, so a bevel never lands on top of it.
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < WINDOW_W; x++) {
+      if (outline[y * WINDOW_W + x] === 1) put(raster, x, y, PANEL_EDGE);
+    }
+  }
 }
 
 export interface DrawnSheet {

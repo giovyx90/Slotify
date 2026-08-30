@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { t } from "../i18n/i18n.svelte";
   import { findSwatch, isNamed, resolveColour, type Swatch } from "../engine/palette";
   import { recentColours, rememberColour } from "./recentColours";
 
@@ -46,11 +47,11 @@
     {#if swatch}
       <button
         class="tag"
-        title="Detach: keep this colour but stop following the palette"
+        title={t("tip.detach")}
         onclick={() => pickLiteral(swatch.hex)}
       >@{swatch.id}</button>
     {:else if dangling}
-      <span class="tag bad" title="Nothing in the palette defines this name">{value}</span>
+      <span class="tag bad" title={t("tip.danglingName")}>{value}</span>
     {/if}
   </div>
 
@@ -62,7 +63,7 @@
     />
     <code>{swatch ? swatch.hex : resolved}</code>
     {#if oneyedrop}
-      <button class="mini" title="Pick a colour off the canvas" onclick={oneyedrop} aria-label="eyedropper"
+      <button class="mini" title={t("tip.eyedropper")} onclick={oneyedrop} aria-label={t("aria.eyedropper")}
         >&#x25C9;</button
       >
     {/if}

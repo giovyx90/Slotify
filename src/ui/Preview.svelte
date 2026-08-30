@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script lang="ts">
+  import { t } from "../i18n/i18n.svelte";
   import { renderScreen, type DrawnSheet } from "../engine/chestRenderer";
   import {
     CELL,
@@ -104,10 +105,7 @@
         <rect x="3" y="3" width="18" height="18" rx="3" />
         <path d="M9 3v18M15 3v18M3 9h18M3 15h18" />
       </svg>
-      <p>
-        Pick a screen on the left. It lands in a real chest window here, at the ascent and
-        advance the pack actually declares — not the ones it meant to.
-      </p>
+      <p>{t("viewer.emptyStage")}</p>
     </div>
   {/if}
 </div>

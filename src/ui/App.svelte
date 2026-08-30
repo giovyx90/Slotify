@@ -9,6 +9,10 @@
   import type { BitmapFont } from "../engine/textFont";
   import { detectBackend, joinPath } from "../platform/fs";
   import Mark from "./Mark.svelte";
+  import Icon from "./kit/Icon.svelte";
+  import NewScreenDialog from "./NewScreenDialog.svelte";
+  import Prefs from "./kit/Prefs.svelte";
+  import { t, tn } from "../i18n/i18n.svelte";
   import Editor from "./Editor.svelte";
   import Preview from "./Preview.svelte";
   import TagTool from "./TagTool.svelte";
@@ -17,6 +21,7 @@
     loadGameFont,
     loadInfoboxSkin,
     loadPack,
+    loadDesignSkins,
     loadPanelSkin,
     measureSheet,
     resolveTexture,
@@ -51,6 +56,7 @@
   let gameFont: BitmapFont | null = $state(null);
   let infoboxSkin: { raster: Raster; border: number } | undefined = $state(undefined);
   let panelSkin: { raster: Raster; border: number } | undefined = $state(undefined);
+  let designSkins: Map<string, { raster: Raster; border: number }> = $state(new Map());
   const mono5 = buildMono5Font();
   const fonts = $derived({ minecraft: gameFont ?? undefined, mono5 });
 
@@ -78,6 +84,7 @@
     gameFont = await loadGameFont(backend, pack);
     infoboxSkin = (await loadInfoboxSkin(backend, pack)) ?? undefined;
     panelSkin = (await loadPanelSkin(backend, pack)) ?? undefined;
+    designSkins = await loadDesignSkins(backend, pack);
     try {
       localStorage.setItem("slotify.root", root);
     } catch {
@@ -238,10 +245,48 @@
     mode = "editor";
   }
 
+  let newScreenOpen = $state(false);
+
+  /** The codepoint the registry says is free, worked out when the dialog opens. */
+  const suggestedCodepoint = $derived.by(() => {
+    const loaded = pack;
+    if (!loaded) return "U+E8E0";
+    const free = nextFree(loaded.registry, { module: "new", first: 0xe8e0, last: 0xf8ff });
+    return formatCodepoint(free ?? 0xe8e0);
+  });
+
+  /**
+   * Every module the pack already talks about: from the saved projects, and from the
+   * `custom_ui/<module>/…` textures the fonts declare. Offering them is what stops the
+   * fourth screen of a module being filed under a fifth spelling of its name.
+   */
+  const knownModules = $derived.by(() => {
+    const names = new Set<string>();
+    for (const file of savedProjects) {
+      const dash = file.indexOf("-");
+      if (dash > 0) names.add(file.slice(0, dash));
+    }
+    for (const screen of pack?.screens ?? []) {
+      const match = /custom_ui\/([^/]+)\//.exec(screen.textureFile);
+      if (match) names.add(match[1]!);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  });
+
   function newScreen(): void {
     if (!pack) return;
-    const free = nextFree(pack.registry, { module: "new", first: 0xe8e0, last: 0xf8ff });
-    project = newProject("mymodule", "screen1", formatCodepoint(free ?? 0xe8e0));
+    newScreenOpen = true;
+  }
+
+  function createScreen(spec: {
+    module: string;
+    screenKey: string;
+    codepoint: string;
+    rows: number;
+  }): void {
+    const made = newProject(spec.module, spec.screenKey, spec.codepoint);
+    made.rows = spec.rows;
+    project = made;
     editorBackground = undefined;
     mode = "editor";
   }
@@ -285,6 +330,8 @@
     {fonts}
     {infoboxSkin}
     {panelSkin}
+    packDesigns={pack.profile.designs ?? []}
+    {designSkins}
     onExit={() => {
       mode = "viewer";
       void refreshProjects();
@@ -303,30 +350,32 @@
     <div class="brand">
       <Mark />
       <span class="wordmark">Slotify</span>
-      <span class="tagline">GUI studio</span>
+      <span class="tagline">{t("chrome.tagline")}</span>
     </div>
 
     {#if pack}
       <div class="seg">
-        <button class="active">Viewer</button>
-        <button onclick={() => (mode = "tag")}>Tag generator</button>
+        <button class="active">{t("chrome.viewer")}</button>
+        <button onclick={() => (mode = "tag")}>{t("chrome.tagGenerator")}</button>
       </div>
     {/if}
 
     <div class="spacer"></div>
 
+    <Prefs />
+
     {#if pack}
       <div class="chips">
-        <span class="chip"><b>{pack.fonts.length}</b> fonts</span>
-        <span class="chip"><b>{pack.registry.glyphs.size}</b> glyphs</span>
-        <span class="chip"><b>{pack.screens.length}</b> sheets</span>
+        <span class="chip">{tn("viewer.fonts", pack.fonts.length)}</span>
+        <span class="chip">{tn("viewer.glyphs", pack.registry.glyphs.size)}</span>
+        <span class="chip">{tn("viewer.sheets", pack.screens.length)}</span>
         {#if pack.collisions.length > 0}
-          <span class="badge warn">{pack.collisions.length} collision{pack.collisions.length === 1 ? "" : "s"}</span>
+          <span class="badge warn">{tn("viewer.collisions", pack.collisions.length)}</span>
         {:else}
-          <span class="badge ok">no collisions</span>
+          <span class="badge ok">{t("viewer.noCollisions")}</span>
         {/if}
       </div>
-      <button class="btn primary" onclick={newScreen}>+ New screen</button>
+      <button class="btn primary" onclick={newScreen}><Icon name="plus" />{t("chrome.newScreen")}</button>
     {/if}
   </header>
 
@@ -336,7 +385,7 @@
         {#if savedProjects.length > 0}
           <section class="card">
             <div class="card-head">
-              <span class="label-mono">Projects</span>
+              <span class="label-mono">{t("panel.projects")}</span>
               <span class="count">{savedProjects.length}</span>
             </div>
             <ul class="list">
@@ -344,7 +393,7 @@
                 <li>
                   <button class="row-btn" onclick={() => openProject(name)}>
                     <span class="truncate">{name.replace(".guiproj.json", "")}</span>
-                    <span class="trail">open</span>
+                    <span class="trail">{t("viewer.open")}</span>
                   </button>
                 </li>
               {/each}
@@ -356,7 +405,7 @@
           <section class="card alarm">
             <details open>
               <summary>
-                <span class="label-mono">Profile disagrees</span>
+                <span class="label-mono">{t("panel.profileDisagrees")}</span>
                 <span class="count">{pack.warnings.length}</span>
               </summary>
               <ul class="collisions">
@@ -372,7 +421,7 @@
           <section class="card alarm">
             <details open>
               <summary>
-                <span class="label-mono">Codepoint collisions</span>
+                <span class="label-mono">{t("panel.collisions")}</span>
                 <span class="count">{pack.collisions.length}</span>
               </summary>
               <ul class="collisions">
@@ -386,7 +435,7 @@
 
         <section class="card screens">
           <div class="card-head">
-            <span class="label-mono">Screens</span>
+            <span class="label-mono">{t("panel.screens")}</span>
             <span class="count">{pack.screens.length}</span>
           </div>
           <nav>
@@ -417,28 +466,25 @@
 
         {#if pack.inferred}
           <section class="card">
-            <div class="card-head"><span class="label-mono">Layout guessed</span></div>
+            <div class="card-head"><span class="label-mono">{t("panel.layoutGuessed")}</span></div>
             <p class="hint">
-              No profile in this folder, so the layout was worked out from it: {pack.inferred}.
-              Fonts are being read from <code>{pack.profile.paths.fontDir}</code>.
+              {t("viewer.guessed", { note: pack.inferred })}
+              {t("viewer.fontsFrom", { dir: pack.profile.paths.fontDir })}
             </p>
             <button class="btn block sm" onclick={writeInferredProfile}>
-              Write slotify.profile.json
+              {t("viewer.writeProfile")}
             </button>
-            <p class="hint">
-              Optional — it only makes the guess explicit, and gives the pack somewhere to
-              keep its palette and its codepoint ranges.
-            </p>
+            <p class="hint">{t("viewer.profileOptional")}</p>
           </section>
         {/if}
 
         <p class="root hint">{pack.root}</p>
       {:else}
         <section class="card">
-          <span class="label-mono">Pack</span>
+          <span class="label-mono">{t("panel.pack")}</span>
           <p class="hint">{status}</p>
           {#if needsFolder}
-            <button class="btn primary block" onclick={pickFolder}>Open pack folder…</button>
+            <button class="btn primary block" onclick={pickFolder}>{t("viewer.openPack")}</button>
           {/if}
         </section>
       {/if}
@@ -451,10 +497,7 @@
             <rect x="3" y="3" width="18" height="18" rx="3" />
             <path d="M3 21 21 3" />
           </svg>
-          <p>
-            No texture in the pack for <span class="mono">{selected?.textureFile}</span>.
-            The font declares a provider that points at nothing — a dangling reference.
-          </p>
+          <p>{t("viewer.dangling", { file: selected?.textureFile ?? "" })}</p>
         </div>
       </section>
     {:else}
@@ -472,54 +515,54 @@
             <span class="chip">{formatCodepoint(selected.codepoint)}</span>
           </div>
           {#if baseSheet}
-            <button class="btn primary block" onclick={openInEditor}>Open in editor</button>
+            <button class="btn primary block" onclick={openInEditor}>{t("viewer.openInEditor")}</button>
           {/if}
         </section>
 
         <section class="card">
-          <div class="card-head"><span class="label-mono">Provider</span></div>
+          <div class="card-head"><span class="label-mono">{t("panel.provider")}</span></div>
           <dl class="kv">
-            <div><dt>Font</dt><dd>{selected.fontFile}</dd></div>
-            <div><dt>Texture</dt><dd>{selected.textureFile}</dd></div>
-            <div><dt>Ascent</dt><dd>{selected.ascent}</dd></div>
-            <div><dt>Height</dt><dd>{selected.height}</dd></div>
+            <div><dt>{t("kv.font")}</dt><dd>{selected.fontFile}</dd></div>
+            <div><dt>{t("kv.texture")}</dt><dd>{selected.textureFile}</dd></div>
+            <div><dt>{t("kv.ascent")}</dt><dd>{selected.ascent}</dd></div>
+            <div><dt>{t("kv.height")}</dt><dd>{selected.height}</dd></div>
           </dl>
         </section>
 
         {#if measurements}
           <section class="card">
-            <div class="card-head"><span class="label-mono">Measured</span></div>
+            <div class="card-head"><span class="label-mono">{t("panel.measured")}</span></div>
             <dl class="kv">
               <div>
-                <dt>Advance</dt>
+                <dt>{t("kv.advance")}</dt>
                 <dd>{measurements.advance}</dd>
               </div>
               <div>
-                <dt>Strays</dt>
+                <dt>{t("kv.strays")}</dt>
                 <dd>
                   {#if measurements.strays > 0}
                     <span class="badge bad">{measurements.strays} px</span>
                   {:else}
-                    <span class="badge ok">none</span>
+                    <span class="badge ok">{t("badge.none")}</span>
                   {/if}
                 </dd>
               </div>
               <div>
-                <dt>Canvas</dt>
+                <dt>{t("kv.canvas")}</dt>
                 <dd>
                   {#if measurements.is256}
                     <span class="badge ok">256×256</span>
                   {:else}
-                    <span class="badge bad">not 256×256</span>
+                    <span class="badge bad">{t("badge.not256")}</span>
                   {/if}
                 </dd>
               </div>
               {#if ascentCheck}
                 <div>
-                  <dt>Implied ascent</dt>
+                  <dt>{t("kv.impliedAscent")}</dt>
                   <dd>
                     {#if ascentCheck.matches}
-                      <span class="badge ok">{ascentCheck.implied} · matches</span>
+                      <span class="badge ok">{ascentCheck.implied} · {t("badge.matches")}</span>
                     {:else}
                       <span class="badge bad">{ascentCheck.implied} ≠ {selected.ascent}</span>
                     {/if}
@@ -528,17 +571,20 @@
               {/if}
             </dl>
             <p class="hint note">
-              Advance is the rightmost opaque column ({measurements.rightmostColumn}) plus two.
+              {t("viewer.advanceIs", { col: measurements.rightmostColumn })}
               {#if measurements.strays > 0}
-                <span class="bad">Those stray pixels inflate it — strip them and it will change.</span>
+                <span class="bad">{t("viewer.straysInflate")}</span>
               {/if}
               {#if !measurements.is256}
-                <span class="bad">A sheet that is not 256×256 scales instead of cropping.</span>
+                <span class="bad">{t("viewer.notSquare")}</span>
               {/if}
               {#if ascentCheck && !ascentCheck.matches}
                 <span class="bad">
-                  Row {ascentCheck.row} of the artwork implies ascent {ascentCheck.implied}, but
-                  gui.json declares {selected.ascent}: the screen draws off by the difference.
+                  {t("viewer.ascentMismatch", {
+                    row: ascentCheck.row,
+                    implied: ascentCheck.implied,
+                    declared: selected.ascent,
+                  })}
                 </span>
               {/if}
             </p>
@@ -548,7 +594,7 @@
         {#if siblings.length > 0}
           <section class="card">
             <div class="card-head">
-              <span class="label-mono">Overlays</span>
+              <span class="label-mono">{t("panel.overlays")}</span>
               <span class="count">{siblings.length}</span>
             </div>
             <ul class="list">
@@ -569,17 +615,17 @@
         {/if}
 
         <section class="card">
-          <div class="card-head"><span class="label-mono">View</span></div>
+          <div class="card-head"><span class="label-mono">{t("panel.view")}</span></div>
           <div class="grid2">
-            <label class="field"><span>rows</span><input type="number" min="1" max="6" bind:value={rows} /></label>
-            <label class="field"><span>shift</span><input type="number" min="-256" max="256" bind:value={shift} /></label>
+            <label class="field"><span>{t("field.rows")}</span><input type="number" min="1" max="6" bind:value={rows} /></label>
+            <label class="field"><span>{t("field.shift")}</span><input type="number" min="-256" max="256" bind:value={shift} /></label>
           </div>
           <label class="field zoom">
-            <span>zoom · {zoom}×</span>
+            <span>{t("viewer.zoom", { n: zoom })}</span>
             <input type="range" min="1" max="8" bind:value={zoom} />
           </label>
-          <label class="check"><input type="checkbox" bind:checked={guides} /> guides</label>
-          <label class="check"><input type="checkbox" bind:checked={hideViewerInventory} /> hide viewer inventory</label>
+          <label class="check"><input type="checkbox" bind:checked={guides} /> {t("check.guides")}</label>
+          <label class="check"><input type="checkbox" bind:checked={hideViewerInventory} /> {t("check.hideViewerInventory")}</label>
         </section>
       {:else if pack}
         <div class="empty">
@@ -587,12 +633,20 @@
             <rect x="3" y="3" width="18" height="18" rx="3" />
             <path d="M9 3v18M15 3v18M3 9h18M3 15h18" />
           </svg>
-          <p>Pick a sheet on the left to see what the pack actually declares, and what the pixels actually measure.</p>
+          <p>{t("viewer.emptyRight")}</p>
         </div>
       {/if}
     </aside>
   </div>
 </div>
+
+<NewScreenDialog
+  bind:open={newScreenOpen}
+  {suggestedCodepoint}
+  taken={savedProjects}
+  modules={knownModules}
+  oncreate={createScreen}
+/>
 {/if}
 
 <style>
