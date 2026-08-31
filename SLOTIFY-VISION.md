@@ -34,12 +34,17 @@ And the half that matters: **profiles are measured, never typed.**
    constant is ever typed by a human. Verified: run against the NEXT pack's own anvil
    texture it finds the 36 player-inventory wells at x=8, y=84/102/120/142 — and, correctly,
    none of the three anvil slots, because that texture has them erased.
-2. **The title origin is calibrated once.** `titleLabelX/Y` lives in client code, not in any
-   texture, so it cannot be detected. It gets measured instead: Slotify writes a sheet with a
-   cross at known coordinates, you register it, open that screen in game and read the window's
-   rectangle and the cross off the screenshot — and it solves. Not `titleLabelX/Y` but the two
-   numbers the engine already uses: `windowX = x + shift + sheetX` and
-   `windowY = sheetY − ascent + k`. One ritual per container, forever.
+2. **The title origin is calibrated once, by dropping a screenshot in.** `titleLabelX/Y` lives
+   in client code, not in any texture, so it cannot be detected. It gets measured instead:
+   Slotify writes a sheet with a magenta cross at known coordinates, you open that screen in
+   game and drop the screenshot on the app. It finds the window by the slot grid it has already
+   measured, finds the cross by its colour, gets the GUI scale from the two together, and
+   solves — with nothing typed. What it stores is not `titleLabelX/Y` but the two numbers the
+   engine already uses: `windowX = x + shift + sheetX` and `windowY = sheetY − ascent + k`.
+   One ritual per container, forever.
+
+   And it is not a wall: a measured container is **ready to draw on**. The origin is only
+   needed to export, so it sits before shipping rather than before the work.
 3. **The result is shareable.** `slotify.containers.json` next to the pack, versioned, extended by
    whoever measures a screen nobody has measured yet. Slotify does not know where the anvil's
    title sits; the first person who calibrates it does, and then everybody does.

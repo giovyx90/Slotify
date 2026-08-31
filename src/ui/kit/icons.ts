@@ -68,6 +68,7 @@ export const ICONS = {
   puzzle: { d: "M6.5 2.5h3v2a1.5 1.5 0 1 1 0 3v2h-3v-2a1.5 1.5 0 1 0 0-3z M9.5 4.5h4v9h-9v-4" },
   save: { d: "M2.5 2.5h9l2 2v9h-11z M5 2.5v4h5v-4 M5 13.5v-4h6v4" },
   export: { d: "M8 10.5v-8 M5 5.5 8 2.5l3 3 M2.5 10v3.5h11V10" },
+  import: { d: "M8 2.5v8 M5 7.5 8 10.5l3-3 M2.5 10v3.5h11V10" },
 } as const satisfies Record<string, IconSpec>;
 
 export type IconName = keyof typeof ICONS;

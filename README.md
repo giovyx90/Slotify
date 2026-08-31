@@ -98,15 +98,17 @@ The roadmap, each stage useful on its own:
   becomes a reusable piece instead of a base64 blob in a JSON file. Infobox text clears
   the box's border by three pixels rather than sitting on it.
 
-- **v7 — Containers, measured** ✅ *(engine + a screen)*: geometry stopped being the
-  chest. A `ContainerProfile` carries a screen's window, slots, viewer inventory and the
-  rectangles the client draws over you, and **nothing in it is typed by hand**: the slots
-  are detected from the container's own texture (a vanilla well has an exact pixel
-  signature) and the title origin — which lives in client code and is in no file — is
-  calibrated once against a screenshot, then saved to `slotify.containers.json` beside
-  the pack so nobody measures the same screen twice. The **Containers** tab scans the
-  pack, reports what each texture measures to and what is still missing, and refuses to
-  fill a gap by resemblance to another screen. Where it is going next is
+- **v7 — Containers, measured** ✅: geometry stopped being the chest. A `ContainerProfile`
+  carries a screen's window, slots and viewer inventory, and **nothing in it is typed by
+  hand**. **Import from Minecraft** reads a client jar and measures every container screen
+  in it — anvil, furnace, brewing stand, villager, all of them — because a vanilla slot
+  well has an exact pixel signature; the textures are measured and dropped, so nothing of
+  Mojang's is written into anybody's pack. What cannot be detected is where the client
+  draws the *title*, which lives in client code: that is **calibrated by dropping a
+  screenshot in**. Slotify finds the window by the slot grid it already measured, finds
+  the marker because it is magenta, works out the GUI scale from the two of them and
+  solves — nothing typed. A measured container is ready to draw on straight away; the
+  calibration is only needed to export. Where the rest of this is going:
   [SLOTIFY-VISION.md](SLOTIFY-VISION.md).
 
 ## Getting it

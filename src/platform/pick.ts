@@ -27,6 +27,12 @@ export interface PickFilter {
 
 export const PNG_FILTER: PickFilter = { name: "PNG image", extensions: ["png"] };
 
+/**
+ * A Minecraft client jar, which is a zip. Slotify reads the container textures out of it
+ * to measure them, and keeps none of them.
+ */
+export const JAR_FILTER: PickFilter = { name: "Minecraft client jar", extensions: ["jar", "zip"] };
+
 /** Opens the platform's file picker and reads the chosen file. Null when cancelled. */
 export async function pickFile(filter: PickFilter = PNG_FILTER): Promise<PickedFile | null> {
   return isTauri() ? pickViaDialog(filter) : pickViaInput(filter);
