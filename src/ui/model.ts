@@ -364,6 +364,46 @@ export async function resolveTexture(
   return null;
 }
 
+/**
+ * Every `gui/container/*.png` the pack overrides, keyed by its `gui/container/<name>.png`
+ * path.
+ *
+ * `resolveTexture` works the category out of the texture path (`custom_ui/<module>/…`),
+ * which is right for painted screens and useless here: an override of a vanilla texture
+ * lands in whichever category the person making it happened to be working in. NEXT's own
+ * anvil sits under `access/`, nowhere near a folder called `container`.
+ *
+ * One listing per category, not one read per guess. The first shape of this cost a
+ * request for every container in every category — a thousand round trips through the dev
+ * bridge to find two files, and it showed.
+ */
+export async function listContainerTextures(
+  backend: FsBackend,
+  pack: LoadedPack,
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+
+  const harvest = async (base: string): Promise<void> => {
+    const dir = joinPath(base, "assets/minecraft/textures/gui/container");
+    for (const entry of await backend.list(dir).catch(() => [])) {
+      if (entry.dir || !entry.name.endsWith(".png")) continue;
+      const key = `gui/container/${entry.name}`;
+      if (!found.has(key)) found.set(key, joinPath(dir, entry.name));
+    }
+  };
+
+  for (const textureRoot of pack.profile.paths.textureRoots) {
+    const base = joinPath(pack.root, textureRoot);
+    await harvest(base);
+    const categories = (await backend.list(base).catch(() => []))
+      .filter((entry) => entry.dir)
+      .map((entry) => entry.name);
+    for (const category of categories) await harvest(joinPath(base, category));
+  }
+
+  return found;
+}
+
 export interface Measurements {
   advance: number;
   rightmostColumn: number;

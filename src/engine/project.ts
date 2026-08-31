@@ -148,6 +148,16 @@ export const ProjectSchema = z.object({
   module: z.string().min(1),
   screenKey: z.string().min(1),
   rows: z.number().int().min(1).max(6),
+  /**
+   * Which container this screen is drawn for, as a profile id (`containers.ts`).
+   *
+   * Absent means a chest of `rows` rows — every project written before container
+   * profiles existed, and the shape this tool was built for. Anything else is looked up
+   * in the pack's `slotify.containers.json`, and a name nothing answers to is refused
+   * rather than drawn as a chest: an anvil on chest geometry looks right in the editor
+   * and is wrong in game.
+   */
+  container: z.string().min(1).optional(),
   /** "U+E8XX" — never a raw character. */
   codepoint: z.string().regex(/^U\+[0-9A-Fa-f]{4,6}$/),
   ascent: z.number().int(),

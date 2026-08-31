@@ -16,6 +16,7 @@
   import Editor from "./Editor.svelte";
   import Preview from "./Preview.svelte";
   import TagTool from "./TagTool.svelte";
+  import Containers from "./Containers.svelte";
   import {
     decodeTexture,
     loadGameFont,
@@ -49,7 +50,7 @@
   let baseSheet: DrawnSheet | null = $state(null);
   let overlaySheets: DrawnSheet[] = $state([]);
 
-  let mode: "viewer" | "editor" | "tag" = $state("viewer");
+  let mode: "viewer" | "editor" | "tag" | "containers" = $state("viewer");
   let project: Project | null = $state(null);
   let editorBackground: Raster | undefined = $state(undefined);
   let savedProjects: string[] = $state([]);
@@ -337,6 +338,8 @@
       void refreshProjects();
     }}
   />
+{:else if mode === "containers" && pack}
+  <Containers {backend} {pack} onExit={() => (mode = "viewer")} />
 {:else if mode === "tag" && pack}
   <TagTool
     {fonts}
@@ -356,6 +359,7 @@
     {#if pack}
       <div class="seg">
         <button class="active">{t("chrome.viewer")}</button>
+        <button onclick={() => (mode = "containers")}>{t("chrome.containers")}</button>
         <button onclick={() => (mode = "tag")}>{t("chrome.tagGenerator")}</button>
       </div>
     {/if}
