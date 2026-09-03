@@ -113,14 +113,38 @@ The roadmap, each stage useful on its own:
 
 ## Getting it
 
-- **Desktop (Windows)** — the installer is attached to each [GitHub
-  Release](https://github.com/giovyx90/Slotify/releases). Tagging `v*` builds it on CI
-  and publishes it there; the binary never enters the repository, where a 6 MB installer
-  per version would stay in every clone forever.
+Every installer is attached to the [GitHub
+Release](https://github.com/giovyx90/Slotify/releases) for its version: tagging `v*`
+builds them on CI and publishes them there, so no binary enters the repository, where a
+6 MB installer per version would stay in every clone forever.
+
+- **Windows** — `.exe` is the usual installer, `.msi` for deployment.
+- **Debian, Ubuntu, Mint, Pop!_OS** — the `.deb`:
+  `sudo apt install ./Slotify_<version>_amd64.deb`.
+- **Fedora, RHEL, openSUSE** — the `.rpm`:
+  `sudo dnf install ./Slotify-<version>-1.x86_64.rpm`.
+- **Arch, Manjaro, EndeavourOS, CachyOS** — build the package from a checkout, so
+  `pacman` owns every file it installs and `pacman -Rns slotify` takes them all back:
+
+  ```bash
+  git clone https://github.com/giovyx90/Slotify.git
+  cd Slotify/packaging/arch && makepkg -si
+  ```
+
+  `makepkg` installs the build dependencies itself. The first compile is a few minutes;
+  after that it is cached like any other Rust build.
+- **Anything else** — the `.AppImage`. `chmod +x Slotify_<version>_amd64.AppImage` and
+  run it: nothing is installed, nothing is left behind, and the whole browser engine
+  travels inside the file. It needs glibc 2.35 or newer, which is Ubuntu 22.04, Debian
+  12 and everything since.
 - **In a browser, no install** — the same build hosted on Vercel. It reaches a real pack
   checkout through the File System Access API: the folder you hand over, and nothing
   else. Chromium only (Chrome, Edge, Opera), and the RCON push stays a desktop feature
   because no page may open a TCP socket.
+
+The `.deb`, the `.rpm` and the Arch package all render through the distro's own
+**WebKitGTK 4.1** and declare it as a dependency, so the package manager pulls it if it
+is missing. The AppImage carries its own copy and depends on nothing.
 
 ## Using it
 
@@ -223,8 +247,19 @@ npm run dev       # browser dev server on :1420
 
 To browse a real pack in the browser dev server, copy
 [`slotify.dev.example.json`](slotify.dev.example.json) to `slotify.dev.json` and point a
-root at your pack checkout. The packaged desktop app (Tauri v2) needs a Rust toolchain:
-`npm run tauri dev`.
+root at your pack checkout.
+
+The packaged desktop app (Tauri v2) needs a Rust toolchain, and on Linux the WebKitGTK
+headers it links against — one package list per distro, which
+[`scripts/linux-deps.sh`](scripts/linux-deps.sh) picks from `/etc/os-release` and prints
+before it runs anything (Arch, Debian, Fedora, openSUSE, Alpine, Void, Gentoo; NixOS
+gets a `nix-shell` line instead). Then `npm run tauri dev`, or `npm run tauri build` to
+produce the installers under `src-tauri/target/release/bundle/`.
+
+Everything the Linux packages need beyond the binary lives in
+[`packaging/`](packaging): one desktop-entry template shared by the `.deb`, the `.rpm`,
+the AppImage and the Arch package, the AppStream metadata that puts the app in GNOME
+Software and KDE Discover, and the `PKGBUILD`.
 
 Golden tests that re-measure a real production pack are gated on the
 `SLOTIFY_NEXT_REPO` environment variable and skip cleanly without it.

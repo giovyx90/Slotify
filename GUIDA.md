@@ -62,16 +62,54 @@ quando qualcosa non torna.
 
 ### App installata (consigliata)
 
-Lancia `src-tauri/target/release/bundle/nsis/Slotify_0.1.0_x64-setup.exe` (o il `.msi`
-nella cartella `msi/`). L'app finisce nel **menu Start** come "Slotify".
+Gli installer sono allegati alla
+[Release GitHub](https://github.com/giovyx90/Slotify/releases) della versione. Scegli
+quello della tua piattaforma:
+
+**Windows** — il `.exe` è l'installer normale, il `.msi` serve per il deploy. L'app
+finisce nel **menu Start** come "Slotify".
+
+**Debian, Ubuntu, Mint, Pop!_OS** — il `.deb`:
+
+```bash
+sudo apt install ./Slotify_<versione>_amd64.deb
+```
+
+**Fedora, RHEL, openSUSE** — il `.rpm`:
+
+```bash
+sudo dnf install ./Slotify-<versione>-1.x86_64.rpm
+```
+
+**Arch, Manjaro, EndeavourOS, CachyOS** — si compila il pacchetto da un checkout, così
+ogni file installato appartiene a `pacman` e `pacman -Rns slotify` li riprende tutti:
+
+```bash
+git clone https://github.com/giovyx90/Slotify.git
+cd Slotify/packaging/arch && makepkg -si
+```
+
+`makepkg` si installa da solo le dipendenze di compilazione. La prima compilazione dura
+qualche minuto, poi viene messa in cache come qualsiasi build Rust.
+
+**Qualsiasi altra distro** — l'`.AppImage`: `chmod +x Slotify_<versione>_amd64.AppImage`
+e si avvia. Non installa niente e non lascia niente in giro, perché si porta dentro il
+motore del browser. Richiede glibc 2.35 o superiore (Ubuntu 22.04, Debian 12 e tutto
+quello che è venuto dopo).
+
+Su Linux `.deb`, `.rpm` e pacchetto Arch usano il **WebKitGTK 4.1** della distro e lo
+dichiarano come dipendenza, quindi il gestore dei pacchetti se lo tira dietro da solo;
+l'AppImage se lo porta dentro e non dipende da nulla.
 
 Al **primo avvio** l'app chiede la **cartella del repository del pack** (la radice del
 repo, quella che contiene `pack-source/`): scegliila col dialog e viene ricordata per le
 volte successive.
 
-> Nota: per compilare l'app da sorgente servono Rust (rustup, toolchain MSVC) e i
-> VS Build Tools con il Windows SDK — e **Smart App Control deve essere disattivato**,
-> perché blocca qualsiasi eseguibile compilato localmente.
+> Nota: per compilare l'app da sorgente serve Rust (rustup). Su Windows servono anche i
+> VS Build Tools con il Windows SDK, e **Smart App Control deve essere disattivato**,
+> perché blocca qualsiasi eseguibile compilato localmente. Su Linux servono gli header
+> di WebKitGTK: `./scripts/linux-deps.sh` riconosce la distro da `/etc/os-release`,
+> stampa il comando esatto e chiede conferma prima di eseguirlo.
 
 ### Modalità sviluppo (browser)
 
@@ -83,8 +121,10 @@ npm run dev        # server su localhost:1420
 Copia `slotify.dev.example.json` in `slotify.dev.json` e punta un root al checkout del
 repo. In dev il browser parla col filesystem attraverso il bridge del server Vite.
 
-Sul Desktop c'è anche il collegamento **Slotify** (ponte): avvia il server dev e apre
-una finestra app dedicata — utile per lo sviluppo con hot-reload.
+Su Windows c'è anche il collegamento **Slotify** (`Slotify.cmd`, il ponte): avvia il
+server dev e apre una finestra app dedicata. Su Linux e macOS lo stesso risultato — hot
+reload dentro una finestra vera invece che in una scheda — si ottiene con
+`npm run tauri dev`.
 
 ---
 

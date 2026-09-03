@@ -124,11 +124,16 @@ describe("detectWells", () => {
  * have been erased, and the numbers below are what that actually measures to. A tool that
  * reported three anvil slots here would be inventing them.
  */
-describe.runIf(process.env.SLOTIFY_NEXT_REPO)("the NEXT pack's anvil", () => {
-  const repo = process.env.SLOTIFY_NEXT_REPO!;
-  const texture = join(repo, "pack-source/access/assets/minecraft/textures/gui/container/anvil.png");
+const repo = process.env.SLOTIFY_NEXT_REPO;
 
-  it.runIf(existsSync(texture))("measures 176×166 with the viewer's inventory at y=84", () => {
+describe.runIf(repo)("the NEXT pack's anvil", () => {
+  // The describe body runs even when the suite is skipped, and so does the `runIf`
+  // argument below — so the path is only built when there is a repo to build it from.
+  const texture = repo
+    ? join(repo, "pack-source/access/assets/minecraft/textures/gui/container/anvil.png")
+    : "";
+
+  it.runIf(texture && existsSync(texture))("measures 176×166 with the viewer's inventory at y=84", () => {
     const detection = detectContainer(decodePng(readFileSync(texture)));
 
     expect(detection.window).toEqual({ x: 0, y: 0, w: 176, h: 166 });

@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Tag a commit `v0.2.0` and push it, and the installer people actually download is built
-# here and attached to a GitHub Release. The binary never enters the repository: a 6 MB
+# Tag a commit `v0.3.0` and push it, and the installers people actually download are built
+# here and attached to a GitHub Release. The binaries never enter the repository: a 6 MB
 # installer committed per version stays in every clone forever, while a release asset is
 # a permanent URL that costs the clone nothing.
+#
+# One job per OS, because a Tauri bundle is linked against the platform it is built on.
+# Linux builds on 22.04 rather than the newest runner on purpose: the .deb and the
+# AppImage carry a floor of whatever glibc built them, and 22.04's 2.35 is old enough to
+# still install on Debian 12 and Ubuntu 22.04 while being new enough for everything since.
 name: Release
 
 on:
@@ -13,9 +18,20 @@ on:
 
 jobs:
   desktop:
-    runs-on: windows-latest
     permissions:
       contents: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            artifacts: .deb, .rpm and AppImage
+          - platform: windows-latest
+            artifacts: .exe and .msi
+
+    runs-on: ${{ matrix.platform }}
+    name: ${{ matrix.artifacts }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +44,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # Cargo's registry and the target directory: without this every tag pays the full
-      # cold compile of the whole Tauri dependency tree.
+      # cold compile of the whole Tauri dependency tree, per platform.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.platform }}
+
+      # WebKitGTK is the engine the packaged app renders in, so it has to be present to
+      # link against. The rest is what the bundler shells out to for .deb/.rpm/AppImage.
+      - name: Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: ./scripts/linux-deps.sh --yes
 
       - run: npm ci
 
@@ -45,8 +68,15 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Slotify ${{ github.ref_name }}
           releaseBody: |
-            Windows installer below — `.exe` is the usual one, `.msi` for deployment.
+            ### Windows
+            `.exe` is the usual installer, `.msi` for deployment.
 
-            The hosted editor runs the same build with no install: see the README.
+            ### Linux
+            `.AppImage` runs anywhere — `chmod +x` it and go. `.deb` for Debian, Ubuntu
+            and Mint; `.rpm` for Fedora, RHEL and openSUSE. On Arch, build the package
+            from the checkout: `cd packaging/arch && makepkg -si`.
+
+            ### No install at all
+            The hosted editor runs the same build in a Chromium browser: see the README.
           releaseDraft: true
           prerelease: false

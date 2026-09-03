@@ -26,12 +26,40 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "GraphicsAndDesign",
+    "shortDescription": "Design tool for Minecraft painted-GUI resource packs",
+    "longDescription": "Slotify designs Minecraft painted GUIs: a chest screen whose title is a bitmap-font glyph, so a full sheet paints a custom window over a plain container. It measures the numbers that trick fails silently on — advance, stray pixels, ascent, codepoint collisions — instead of guessing them.",
+    "homepage": "https://github.com/giovyx90/Slotify",
+    "publisher": "giovyx90",
+    "copyright": "Copyright (C) 2026 giovyx90",
+    "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "section": "graphics",
+        "priority": "optional",
+        "desktopTemplate": "../packaging/linux/slotify.desktop.hbs",
+        "files": {
+          "/usr/share/metainfo/dev.giovyx.slotify.metainfo.xml": "../packaging/linux/dev.giovyx.slotify.metainfo.xml"
+        }
+      },
+      "rpm": {
+        "release": "1",
+        "desktopTemplate": "../packaging/linux/slotify.desktop.hbs",
+        "files": {
+          "/usr/share/metainfo/dev.giovyx.slotify.metainfo.xml": "../packaging/linux/dev.giovyx.slotify.metainfo.xml"
+        }
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   }
 }

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!--
+  AppStream metadata: what GNOME Software and KDE Discover read to show the app as a
+  catalogue entry with a description, rather than the bare name a .desktop file gives
+  them. Installed to /usr/share/metainfo/ by the deb, the rpm and the Arch package alike.
+
+  <requires><display_length> is the app's own minWidth from tauri.conf.json, so a store
+  on a narrow screen says so instead of offering an install that will not fit.
+  Check changes with `appstreamcli validate` (add the pedantic flag for the hints).
+-->
+<component type="desktop-application">
+  <id>dev.giovyx.slotify</id>
+
+  <name>Slotify</name>
+  <summary>Design Minecraft painted-GUI resource packs</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <developer id="dev.giovyx">
+    <name>giovyx90</name>
+  </developer>
+
+  <description>
+    <p>
+      Slotify is a design tool for Minecraft painted GUIs — chest screens whose title is a
+      bitmap-font glyph, so a full 256×256 sheet paints a completely custom window over a
+      plain container.
+    </p>
+    <p>
+      That trick fails silently: a wrong ascent draws the screen a few pixels off with
+      nothing in any log, one stray opaque pixel drags every overlay sideways, and two
+      providers claiming a codepoint means the later one quietly wins. Slotify measures
+      those numbers instead of guessing them.
+    </p>
+    <p>What it does:</p>
+    <ul>
+      <li>Parses every font file in a pack and builds a codepoint registry, flagging collisions, dangling references and the next free slot.</li>
+      <li>Previews painted sheets pixel-perfect in a real chest window, with live advance, stray-pixel and ascent measurements.</li>
+      <li>Edits screens on a touch-first canvas — slots, connectable buttons, panels, wells, infoboxes and text in the pack's own bitmap font.</li>
+      <li>Exports the stray-stripped PNG and splices the provider into <code>gui.json</code> as an idempotent textual edit, never a re-serialisation.</li>
+      <li>Measures container geometry straight out of a client jar, and calibrates the title origin from a dropped-in screenshot.</li>
+      <li>Pushes a deploy plan to a server and reloads the pack over RCON.</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">Slotify.desktop</launchable>
+
+  <categories>
+    <category>Graphics</category>
+    <category>Development</category>
+  </categories>
+
+  <keywords>
+    <keyword>Minecraft</keyword>
+    <keyword>resourcepack</keyword>
+    <keyword>GUI</keyword>
+    <keyword>glyph</keyword>
+    <keyword>bitmap font</keyword>
+    <keyword>texture</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/giovyx90/Slotify</url>
+  <url type="bugtracker">https://github.com/giovyx90/Slotify/issues</url>
+  <url type="help">https://github.com/giovyx90/Slotify/blob/main/README.md</url>
+  <url type="vcs-browser">https://github.com/giovyx90/Slotify</url>
+
+  <provides>
+    <binary>slotify</binary>
+  </provides>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">900</display_length>
+  </requires>
+
+  <content_rating type="oars-1.1" />
+</component>

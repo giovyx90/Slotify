@@ -1,0 +1,119 @@
+# Maintainer: giovyx90 <https://github.com/giovyx90>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds and installs Slotify as a real pacman package, so `pacman -Rns slotify` takes
+# every file back out again. Run it from this directory:
+#
+#     cd packaging/arch && makepkg -si
+#
+# It packages the *committed* tree at HEAD (via `git archive`), not the working
+# directory: what you install is exactly what you could push, and node_modules/ and
+# target/ never end up in $srcdir. Commit before you build.
+#
+# `tauri build --no-bundle` stops after the binary. The .deb/.rpm/AppImage bundlers have
+# nothing to offer a pacman package, and the files they would lay out are installed
+# below by hand, at the paths Arch expects.
+#
+# To publish this on the AUR, the two edits are: replace the `_repo`/`pkgver` pair with a
+# literal `pkgver=`, and replace prepare() with a real source=() line —
+#   source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# everything from build() down is already AUR-shaped.
+
+_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+pkgname=slotify
+# Read from package.json rather than declared here: the version already lives in three
+# files that have to agree, and a fourth copy would be a fourth thing to forget.
+pkgver="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$_repo/package.json")"
+pkgrel=1
+pkgdesc="Design tool for Minecraft painted-GUI resource packs"
+arch=('x86_64' 'aarch64')
+url="https://github.com/giovyx90/Slotify"
+license=('GPL-3.0-or-later')
+
+# What the binary actually links against, checked with objdump -p. webkit2gtk-4.1 pulls
+# most of the rest in, but Arch asks for the direct ones to be named.
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libsoup3'
+  'glib2'
+  'cairo'
+  'gdk-pixbuf2'
+  'dbus'
+  'gcc-libs'
+  'glibc'
+  'hicolor-icon-theme'
+)
+makedepends=('cargo' 'git' 'nodejs' 'npm' 'pkgconf')
+options=('!debug' '!lto')
+source=()
+sha256sums=()
+
+prepare() {
+  rm -rf "$srcdir/$pkgname"
+  mkdir -p "$srcdir/$pkgname"
+  git -C "$_repo" archive --format=tar HEAD | tar -x -C "$srcdir/$pkgname"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+
+  # `npm ci` and not `npm install`: the lockfile is the point, and a build that resolves
+  # different dependencies than the tested one is not the tested one.
+  npm ci
+  npm run tauri build -- --no-bundle
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  npm test
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  install -Dm755 "src-tauri/target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+  # The menu entry, rendered from the same template the .deb and the AppImage use, with
+  # the values the Tauri bundler would have substituted.
+  local desktop="$srcdir/Slotify.desktop"
+  sed -e 's/{{name}}/Slotify/g' \
+      -e "s/{{exec}}/$pkgname/g" \
+      -e "s/{{icon}}/$pkgname/g" \
+      -e 's/{{#if comment}}Comment={{comment}}{{\/if}}/Comment=Design tool for Minecraft painted-GUI resource packs/' \
+      -e 's/{{#if exec_arg}} {{exec_arg}}{{\/if}}//' \
+      -e '/{{#if mime_type}}/d' \
+      packaging/linux/slotify.desktop.hbs > "$desktop"
+
+  # If the template grows a placeholder this sed does not know, say so here rather than
+  # shipping a desktop file with `{{` in it — and refuse an empty one, which is what a
+  # renamed or moved template would otherwise leave behind.
+  if [[ ! -s "$desktop" ]] || grep -q '{{' "$desktop"; then
+    echo "==> packaging/linux/slotify.desktop.hbs did not render:" >&2
+    grep -n '{{' "$desktop" >&2 || echo "    (rendered file is empty)" >&2
+    return 1
+  fi
+  install -Dm644 "$desktop" "$pkgdir/usr/share/applications/Slotify.desktop"
+
+  install -Dm644 packaging/linux/dev.giovyx.slotify.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/dev.giovyx.slotify.metainfo.xml"
+
+  # Every raster size the icon set actually contains, plus the SVG the whole set is
+  # rasterised from — so the shell scales from vector wherever it can.
+  local size
+  for size in 32x32 64x64 128x128; do
+    install -Dm644 "src-tauri/icons/$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/$size/apps/$pkgname.png"
+  done
+  install -Dm644 "src-tauri/icons/128x128@2x.png" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
+  install -Dm644 "src-tauri/icons/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/$pkgname.png"
+  install -Dm644 art/app-icon.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 GUIDA.md "$pkgdir/usr/share/doc/$pkgname/GUIDA.md"
+}
